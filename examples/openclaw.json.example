@@ -1,0 +1,35 @@
+{
+  "plugins": [
+    {
+      "name": "openclaw-ollama-router",
+      "enabled": true,
+      "config": {
+        "baseUrl": "http://127.0.0.1:11434",
+        "allowedModels": [],
+        "defaultPreference": "speed",
+        "defaultKeepAlive": 0,
+        "requestTimeout": 120000
+      }
+    }
+  ],
+  "skills": [
+    "ollama-smart-router"
+  ],
+  "agents": [
+    {
+      "name": "smart-assistant",
+      "model": "mini-max",
+      "plugins": ["openclaw-ollama-router"],
+      "skills": ["ollama-smart-router"]
+    }
+  ],
+  "examples": {
+    "description": "Example OpenClaw configuration for Ollama Router plugin",
+    "notes": [
+      "1. Ensure Ollama is running on your machine",
+      "2. Link this plugin: npm link in the plugin directory, then use in OpenClaw",
+      "3. Configure allowedModels to restrict which models can be used",
+      "4. Set preference to 'quality' if you want larger models by default"
+    ]
+  }
+}

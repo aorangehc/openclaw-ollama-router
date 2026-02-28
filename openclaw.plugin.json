@@ -1,0 +1,89 @@
+{
+  "name": "ollama-smart-router",
+  "version": "1.0.0",
+  "description": "Intelligent Ollama model router with resource awareness for OpenClaw",
+  "main": "dist/index.js",
+  "skills": [
+    "skills/ollama-smart-router/SKILL.md"
+  ],
+  "tools": [
+    {
+      "name": "ollama_route",
+      "description": "Route to the best available Ollama model based on task type and system resources. Automatically handles vision, chat, and image generation tasks.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "enum": ["auto", "chat", "vision", "image_generation"],
+            "description": "Task type to route: auto (auto-detect), chat (text), vision (image understanding), image_generation (image creation)"
+          },
+          "text": {
+            "type": "string",
+            "description": "Text prompt or conversation content"
+          },
+          "images_b64": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Base64 encoded images for vision tasks"
+          },
+          "preference": {
+            "type": "string",
+            "enum": ["speed", "quality"],
+            "default": "speed",
+            "description": "Model preference: speed (smaller/faster) or quality (larger/more capable)"
+          },
+          "max_retries": {
+            "type": "number",
+            "default": 3,
+            "description": "Maximum number of model fallback attempts"
+          },
+          "keep_alive": {
+            "oneOf": [
+              { "type": "number" },
+              { "type": "string" }
+            ],
+            "default": 0,
+            "description": "Model keep-alive duration in seconds or duration string (e.g., '2m'). Use 0 to release immediately after use."
+          }
+        },
+        "required": ["task"]
+      }
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "default": "http://127.0.0.1:11434",
+        "description": "Ollama API base URL"
+      },
+      "allowedModels": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Whitelist of model names to use. If empty, all available models are candidates."
+      },
+      "defaultPreference": {
+        "type": "string",
+        "enum": ["speed", "quality"],
+        "default": "speed",
+        "description": "Default model preference when not specified in request"
+      },
+      "defaultKeepAlive": {
+        "oneOf": [
+          { "type": "number" },
+          { "type": "string" }
+        ],
+        "default": 0,
+        "description": "Default keep-alive duration in seconds"
+      },
+      "requestTimeout": {
+        "type": "number",
+        "default": 120000,
+        "description": "Request timeout in milliseconds"
+      }
+    },
+    "additionalProperties": false
+  }
+}
