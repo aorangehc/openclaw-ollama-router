@@ -4,6 +4,7 @@
 
 [![npm version](https://img.shields.io/npm/v/openclaw-ollama-router.svg)](https://www.npmjs.com/package/openclaw-ollama-router)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue.svg)](https://www.typescriptlang.org/)
+[![Test](https://github.com/aorangehc/openclaw-ollama-router/actions/workflows/test.yml/badge.svg)](https://github.com/aorangehc/openclaw-ollama-router/actions)
 
 English | [中文](./docs/README.zh-CN.md)
 

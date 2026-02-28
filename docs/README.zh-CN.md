@@ -4,7 +4,7 @@
 
 [![npm version](https://img.shields.io/npm/v/openclaw-ollama-router.svg)](https://www.npmjs.com/package/openclaw-ollama-router)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue.svg)](https://www.typescriptlang.org/)
-[![Test](https://github.com/openclaw-ollama-router/actions/workflows/test.yml/badge.svg)](https://github.com/openclaw-ollama-router/actions/workflows/test.yml)
+[![Test](https://github.com/aorangehc/openclaw-ollama-router/actions/workflows/test.yml/badge.svg)](https://github.com/aorangehc/openclaw-ollama-router/actions)
 
 [English](../README.md) | 中文
 
@@ -265,7 +265,7 @@ src/
 ## 相关链接
 
 - [Ollama](https://ollama.com/) - 本地 LLM 运行时
-- [OpenClaw](https://github.com/openclaw-ollama) - AI Agent 框架
+- [OpenClaw](https://github.com/aorangehc/openclaw-ollama-router) - AI Agent 框架
 - [Ollama API 文档](https://github.com/ollama/ollama/blob/main/docs/api.md)
 - [OpenAI 兼容端点](https://github.com/ollama/ollama/blob/main/docs/openai.md)
 
