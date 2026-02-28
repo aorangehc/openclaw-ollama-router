@@ -1,4 +1,4 @@
-// Type definitions for OpenClaw Ollama Router
+// Type definitions for OpenClaw Omni Router
 
 // ==================== Configuration ====================
 
@@ -87,24 +87,42 @@ export interface RouterOptions {
   allowedModels?: string[];
   // Internal fields (set by handler)
   _runningProcesses?: OllamaProcess[];
+  _availableMemoryRatio?: number;
 }
 
 // ==================== Response Types ====================
 
+export interface AudioContext {
+  hasAudio?: boolean;
+  transcript?: string;
+  channel?: string;
+}
+
+export interface AudioDiagnostics {
+  hasAudio: boolean;
+  transcript_used: boolean;
+  transcript_len?: number;
+  channel?: string;
+  note?: string;
+}
+
 export interface Diagnostics {
   candidates_tried: string[];
+  audio: AudioDiagnostics;
   errors?: Record<string, unknown>[];
   timings?: Record<string, number>;
   fallback?: string;
 }
 
-export interface OllamaRouteResponse {
+export interface OmniRouteResponse {
   chosen_model: string;
   task: TaskType;
   text?: string;
   image_b64?: string;
   diagnostics: Diagnostics;
 }
+
+export type OllamaRouteResponse = OmniRouteResponse;
 
 // ==================== Tool Handler Types ====================
 
@@ -115,6 +133,7 @@ export interface ToolInput {
   preference?: Preference;
   max_retries?: number;
   keep_alive?: number | string;
+  context?: AudioContext;
 }
 
 // ==================== Utility Types ====================
