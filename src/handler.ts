@@ -1,25 +1,78 @@
-// Tool Handler - Main entry point for ollama_route tool
+// Tool Handler - Main entry point for omni_route tool
 
 import { createClient } from './ollama/client.js';
 import { chooseModel, detectTaskType } from './router/chooseModel.js';
 import type {
+  AudioDiagnostics,
   PluginConfig,
   ToolInput,
-  OllamaRouteResponse,
+  OmniRouteResponse,
   CandidateModel,
   Diagnostics,
 } from './types/index.js';
 
+const AUDIO_TRANSCRIPTION_HINT =
+  "I received audio input but couldn't find a transcript. Enable tools.media.audio in OpenClaw or send text instead.";
+
+function normalizeText(value?: string): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
+function buildAudioDiagnostics(input: ToolInput): AudioDiagnostics {
+  const hasAudio = Boolean(input.context?.hasAudio);
+  const transcript = normalizeText(input.context?.transcript);
+  const directText = normalizeText(input.text);
+
+  if (transcript) {
+    return {
+      hasAudio,
+      transcript_used: true,
+      transcript_len: transcript.length,
+      channel: input.context?.channel,
+      note: 'Transcript from tools.media.audio',
+    };
+  }
+
+  if (hasAudio && directText) {
+    return {
+      hasAudio,
+      transcript_used: false,
+      channel: input.context?.channel,
+      note: 'Audio input present but transcript unavailable; used provided text',
+    };
+  }
+
+  if (hasAudio) {
+    return {
+      hasAudio,
+      transcript_used: false,
+      channel: input.context?.channel,
+      note: 'Audio input received without transcript',
+    };
+  }
+
+  return {
+    hasAudio: false,
+    transcript_used: false,
+    channel: input.context?.channel,
+  };
+}
+
 /**
- * Main handler for ollama_route tool
+ * Main handler for omni_route tool
  */
-export async function handleOllamaRoute(
+export async function handleOmniRoute(
   input: ToolInput,
   config: PluginConfig
-): Promise<OllamaRouteResponse> {
+): Promise<OmniRouteResponse> {
   const startTime = Date.now();
+  const transcript = normalizeText(input.context?.transcript);
+  const directText = normalizeText(input.text);
+  const effectiveText = transcript ?? directText;
   const diagnostics: Diagnostics = {
     candidates_tried: [],
+    audio: buildAudioDiagnostics(input),
     errors: [],
     timings: {},
   };
@@ -32,13 +85,23 @@ export async function handleOllamaRoute(
 
   // Resolve task type
   const task = input.task === 'auto'
-    ? detectTaskType(input.text, input.images_b64)
+    ? detectTaskType(effectiveText, input.images_b64)
     : input.task;
 
   // Get keepAlive value
   const keepAlive = input.keep_alive ?? config.defaultKeepAlive ?? 0;
   const maxRetries = input.max_retries ?? 3;
   const preference = input.preference ?? config.defaultPreference ?? 'speed';
+
+  if (diagnostics.audio.hasAudio && !effectiveText && (!input.images_b64 || input.images_b64.length === 0)) {
+    diagnostics.timings!.completed = Date.now() - startTime;
+    return {
+      chosen_model: '',
+      task,
+      text: AUDIO_TRANSCRIPTION_HINT,
+      diagnostics,
+    };
+  }
 
   try {
     diagnostics.timings!.fetch_models_start = Date.now() - startTime;
@@ -108,7 +171,7 @@ export async function handleOllamaRoute(
     // Choose best model
     const selectedModels = chooseModel(candidates, {
       task,
-      text: input.text,
+      text: effectiveText,
       images_b64: input.images_b64,
       preference,
       maxRetries,
@@ -145,12 +208,13 @@ export async function handleOllamaRoute(
             model.name,
             [{
               role: 'user',
-              content: input.text || 'Describe this image',
+              content: effectiveText || 'Describe this image',
               images: input.images_b64,
             }],
             keepAlive
           );
           diagnostics.timings![`attempt_${model.name}`] = Date.now() - attemptStart;
+          diagnostics.timings!.completed = Date.now() - startTime;
 
           return {
             chosen_model: model.name,
@@ -162,13 +226,14 @@ export async function handleOllamaRoute(
           // Image generation request
           const imgResult = await client.generateImage(
             model.name,
-            input.text || 'Generate an image',
+            effectiveText || 'Generate an image',
             keepAlive
           );
 
           diagnostics.timings![`attempt_${model.name}`] = Date.now() - attemptStart;
 
           if (imgResult.b64_json) {
+            diagnostics.timings!.completed = Date.now() - startTime;
             return {
               chosen_model: model.name,
               task,
@@ -181,12 +246,13 @@ export async function handleOllamaRoute(
           }
         } else {
           // Chat request
-          const messages = input.text
-            ? [{ role: 'user', content: input.text }]
+          const messages = effectiveText
+            ? [{ role: 'user', content: effectiveText }]
             : [];
 
           result = await client.chat(model.name, messages, keepAlive);
           diagnostics.timings![`attempt_${model.name}`] = Date.now() - attemptStart;
+          diagnostics.timings!.completed = Date.now() - startTime;
 
           return {
             chosen_model: model.name,
@@ -216,6 +282,10 @@ export async function handleOllamaRoute(
       text: undefined,
       diagnostics: {
         ...diagnostics,
+        timings: {
+          ...(diagnostics.timings || {}),
+          completed: Date.now() - startTime,
+        },
         errors: [
           ...(diagnostics.errors || []),
           { message: 'All model attempts failed' },
@@ -230,6 +300,10 @@ export async function handleOllamaRoute(
       text: undefined,
       diagnostics: {
         ...diagnostics,
+        timings: {
+          ...(diagnostics.timings || {}),
+          completed: Date.now() - startTime,
+        },
         errors: [
           ...(diagnostics.errors || []),
           { message: error.message || 'Fatal error' },
@@ -238,3 +312,5 @@ export async function handleOllamaRoute(
     };
   }
 }
+
+export const handleOllamaRoute = handleOmniRoute;

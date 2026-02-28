@@ -189,7 +189,7 @@ function sortCandidates(
         // Under congestion, prefer smaller models
         const aOrder = getParamOrder(a.parameterSize);
         const bOrder = getParamOrder(b.parameterSize);
-        return bOrder - aOrder; // Smaller first when congested
+        return aOrder - bOrder;
       }
       // Otherwise, larger first
       const aOrder = getParamOrder(a.parameterSize);
@@ -261,7 +261,7 @@ export function chooseModel(
   });
 
   // 4. Filter by capability and allowed models
-  let filtered = filterByCapability(enrichedCandidates, actualTask, allowedModels);
+  const filtered = filterByCapability(enrichedCandidates, actualTask, allowedModels);
 
   if (filtered.length === 0) {
     // If no models match, return empty (will trigger error)
@@ -273,16 +273,23 @@ export function chooseModel(
     options._runningProcesses || [],
     enrichedCandidates
   );
+  const availableMemoryRatio = options._availableMemoryRatio ?? getAvailableMemoryRatio();
 
-  // 6. Add congestion warning to diagnostics
-  if (congestion > 0.5 && preference === 'quality') {
-    // Will add warning in response
+  const preferred: CandidateModel[] = [];
+  const demoted: CandidateModel[] = [];
+
+  for (const model of filtered) {
+    if (shouldDemote(model, availableMemoryRatio, congestion)) {
+      demoted.push(model);
+    } else {
+      preferred.push(model);
+    }
   }
 
-  // 7. Sort by preference and congestion
-  filtered = sortCandidates(filtered, preference, congestion);
-
-  return filtered;
+  return [
+    ...sortCandidates(preferred, preference, congestion),
+    ...sortCandidates(demoted, 'speed', congestion),
+  ];
 }
 
 /**

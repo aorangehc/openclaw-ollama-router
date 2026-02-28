@@ -111,22 +111,38 @@ export class OllamaClient {
     try {
       const info = await this.showModel(name);
       const details = info.details;
-      const families = details.families || [];
+      const families = [details.family, ...(details.families || [])]
+        .filter((value): value is string => Boolean(value))
+        .map(value => value.toLowerCase());
+      const lowerName = name.toLowerCase();
 
       // Vision models typically have 'llava' family or vision in name
       // Also check for qwen3vl, deepseekocr (OCR/vision models)
-      const hasVision = families.includes('llava') ||
-        families.includes('vision') ||
-        families.includes('qwen3vl') ||
-        families.includes('deepseekocr') ||
-        name.toLowerCase().includes('vision') ||
-        name.toLowerCase().includes('llava') ||
-        name.toLowerCase().includes('vl-') ||
-        name.toLowerCase().includes('-vl');
+      const hasVision = families.some(family =>
+        family.includes('llava') ||
+        family.includes('vision') ||
+        family.includes('qwen3vl') ||
+        family.includes('deepseekocr')
+      ) ||
+        lowerName.includes('vision') ||
+        lowerName.includes('llava') ||
+        lowerName.includes('vl-') ||
+        lowerName.includes('-vl');
 
-      // Image generation - Ollama doesn't have native support,
-      // but some models may support it via OpenAI compatibility
-      const hasImageGeneration = false; // Will be determined by endpoint availability
+      // Image generation support cannot be discovered reliably from Ollama metadata,
+      // so use conservative heuristics that match common model families.
+      const imageGenerationHints = [
+        'flux',
+        'diffusion',
+        'stable-diffusion',
+        'stable_diffusion',
+        'sdxl',
+        'playground',
+        'juggernaut',
+      ];
+      const hasImageGeneration = families.some(family =>
+        imageGenerationHints.some(hint => family.includes(hint))
+      ) || imageGenerationHints.some(hint => lowerName.includes(hint));
 
       return {
         hasVision,
@@ -230,7 +246,7 @@ export class OllamaClient {
     } catch {
       // Fallback: try direct Ollama endpoint if available
       try {
-        return await this.request<{ b64_json?: string; url?: string }>('/api/generate', {
+        const result = await this.request<{ b64_json?: string; url?: string; response?: string }>('/api/generate', {
           method: 'POST',
           body: JSON.stringify({
             model,
@@ -238,6 +254,24 @@ export class OllamaClient {
             keep_alive: this.formatKeepAlive(keepAlive),
           }),
         }, 30000);
+
+        if (result.b64_json || result.url) {
+          return result;
+        }
+
+        if (typeof result.response === 'string') {
+          const normalized = result.response.trim();
+          if (normalized.startsWith('data:image/')) {
+            const [, base64 = ''] = normalized.split(',', 2);
+            return base64 ? { b64_json: base64 } : {};
+          }
+
+          if (/^[A-Za-z0-9+/=\s]+$/.test(normalized) && normalized.length > 256) {
+            return { b64_json: normalized.replace(/\s+/g, '') };
+          }
+        }
+
+        return {};
       } catch {
         // Return empty result - caller should handle graceful degradation
         return {};
