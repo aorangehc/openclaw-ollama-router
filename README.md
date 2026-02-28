@@ -27,7 +27,7 @@ OpenClaw Omni Router is a plugin that automatically routes tasks to the most app
 - **Automatic Fallback**: If a model fails, automatically tries the next candidate
 - **Cross-Platform**: Works on Windows, macOS, and Linux
 - **Zero External Dependencies**: Uses native `fetch` for HTTP requests
-- **Voice Support**: Integrates with OpenClaw's audio transcription (STT) and TTS
+- **Voice Support**: Consumes OpenClaw audio transcripts and returns audio-aware diagnostics
 
 ## Quick Start
 
@@ -271,8 +271,7 @@ The main tool for routing requests to Ollama models.
 {
   "tool": "omni_route",
   "input": {
-    "task": "chat",
-    "text": "What's the weather today?",
+    "task": "auto",
     "context": {
       "hasAudio": true,
       "transcript": "What's the weather today?",
@@ -281,6 +280,10 @@ The main tool for routing requests to Ollama models.
   }
 }
 ```
+
+#### Audio Input Without Transcript
+
+When `context.hasAudio` is `true` but neither `context.transcript` nor `text` is available, the tool returns a prompt telling the user to enable `tools.media.audio` or send text instead of trying to route an empty request.
 
 ## Skill
 
@@ -314,7 +317,7 @@ npm run test:watch
 - `tests/router.test.ts` - Model selection and routing logic
 - `tests/client.test.ts` - Ollama HTTP client
 - `tests/handler.test.ts` - Tool handler integration
-- `tests/voice.test.ts` - Voice scenario skill rules
+- `tests/voice.test.ts` - Voice-aware handler behavior
 
 ## Troubleshooting
 
@@ -346,7 +349,7 @@ The router automatically handles this by:
 1. Ensure `tools.media.audio.enabled` is `true`
 2. Check that CLI is in PATH (for local transcription)
 3. Verify provider API key (for cloud transcription)
-4. Check OpenClaw logs for transcription errors
+4. If the tool says it could not find a transcript, confirm OpenClaw is passing `context.transcript`
 
 ### Voice Output Not Working
 

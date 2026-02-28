@@ -1,75 +1,42 @@
-# OpenClaw Ollama 智能路由器
+# OpenClaw Omni Router
 
-> 具有资源感知能力的 OpenClaw Ollama 模型路由插件
+> 面向 OpenClaw 的 Ollama 多模态路由插件，支持资源感知与语音上下文
 
-[![npm version](https://img.shields.io/npm/v/openclaw-ollama-router.svg)](https://www.npmjs.com/package/openclaw-ollama-router)
+[![npm version](https://img.shields.io/npm/v/openclaw-omni-router.svg)](https://www.npmjs.com/package/openclaw-omni-router)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue.svg)](https://www.typescriptlang.org/)
-[![Test](https://github.com/aorangehc/openclaw-ollama-router/actions/workflows/test.yml/badge.svg)](https://github.com/aorangehc/openclaw-ollama-router/actions)
+[![Test](https://github.com/aorangehc/openclaw-omni-router/actions/workflows/test.yml/badge.svg)](https://github.com/aorangehc/openclaw-omni-router/actions)
 
 [English](../README.md) | 中文
 
 ## 概述
 
-OpenClaw Ollama 路由器是一个插件，能够根据以下因素自动将任务路由到最合适的 Ollama 模型：
+OpenClaw Omni Router 会根据任务类型、模型能力、运行中模型和系统内存情况，为请求挑选更合适的 Ollama 模型，并补充语音输入上下文：
 
-- **任务类型**: 对话、视觉、图像生成
-- **模型能力**: 从模型信息中自动检测
-- **可用资源**: VRAM、RAM、运行中的模型
-- **用户偏好**: 速度优先还是质量优先
-
-## 功能特性
-
-- **自动模型发现**: 列出本地所有可用的 Ollama 模型，无需下载
-- **能力检测**: 自动从模型家族/名称检测视觉支持
-- **资源感知**: 监控 VRAM 和系统内存以避免 OOM
-- **智能路由**: 根据任务和资源选择最佳模型
-- **自动回退**: 如果模型失败，自动尝试下一个候选
-- **跨平台**: 支持 Windows、macOS 和 Linux
-- **零外部依赖**: 使用原生 `fetch` 进行 HTTP 请求
+- 文本对话、视觉理解、图像生成统一通过 `omni_route` 路由
+- 支持从 `tools.media.audio` 传入的 transcript 作为真实用户输入
+- 在资源紧张时降低大模型优先级，减少 OOM
+- 当语音消息没有 transcript 时，直接返回清晰提示，而不是盲目调用模型
 
 ## 安装
 
-### 从源码安装（开发）
-
 ```bash
-# 克隆或进入插件目录
-cd /path/to/openclaw-ollama-router
-
-# 安装依赖
-npm install
-
-# 构建插件
-npm run build
+npm install openclaw-omni-router
 ```
 
-### 链接到 OpenClaw（本地开发）
+本地开发也可以使用：
 
 ```bash
-# 在插件目录中
 npm link
-
-# 在你的 OpenClaw 项目中
-npm link openclaw-ollama-router
-
-# 或使用本地路径
-npm install /path/to/openclaw-ollama-router
+npm link openclaw-omni-router
 ```
 
-### 生产环境安装
-
-```bash
-npm install openclaw-ollama-router
-```
-
-## 配置
-
-将插件添加到你的 OpenClaw 配置中：
+## 插件配置
 
 ```json
 {
   "plugins": [
     {
-      "name": "openclaw-ollama-router",
+      "name": "openclaw-omni-router",
       "enabled": true,
       "config": {
         "baseUrl": "http://127.0.0.1:11434",
@@ -79,195 +46,138 @@ npm install openclaw-ollama-router
         "requestTimeout": 120000
       }
     }
-  ]
+  ],
+  "skills": ["omni-router"]
 }
 ```
 
-### 配置选项
+## 语音输入
 
-| 选项 | 类型 | 默认值 | 描述 |
-|------|------|--------|------|
-| `baseUrl` | string | `http://127.0.0.1:11434` | Ollama API 基础 URL |
-| `allowedModels` | string[] | `[]` | 模型名称白名单，空 = 所有模型 |
-| `defaultPreference` | `"speed"` \| `"quality"` | `"speed"` | 默认模型偏好 |
-| `defaultKeepAlive` | number \| string | `0` | 默认保活时间（秒） |
-| `requestTimeout` | number | `120000` | 请求超时（毫秒） |
+如果你希望语音消息自动变成文本请求，需要在 OpenClaw 中启用 `tools.media.audio`。
 
-## 使用方法
+### 本地 CLI 转写
 
-### 工具: `ollama_route`
+```json
+{
+  "tools": {
+    "media": {
+      "audio": {
+        "enabled": true,
+        "provider": "cli",
+        "cli": {
+          "command": "whisper-cli",
+          "args": ["-f", "{{MediaPath}}"]
+        }
+      }
+    }
+  }
+}
+```
 
-用于将请求路由到 Ollama 模型的主要工具。
+### 云端转写
 
-#### 输入 schema
+```json
+{
+  "tools": {
+    "media": {
+      "audio": {
+        "enabled": true,
+        "provider": "google",
+        "providerConfig": {
+          "apiKey": "your-api-key"
+        }
+      }
+    }
+  }
+}
+```
+
+## 语音输出
+
+语音回复仍由 OpenClaw 的 `messages.tts` 控制：
+
+```json
+{
+  "messages": {
+    "tts": {
+      "auto": "inbound"
+    }
+  }
+}
+```
+
+如果使用 `tagged` 模式，则需要上层 agent 在回复中附加 `[[tts]]`。
+
+## 工具
+
+### `omni_route`
+
+输入：
 
 ```typescript
 {
   task: "auto" | "chat" | "vision" | "image_generation",
-  text?: string,                    // 文本提示
-  images_b64?: string[],             // 视觉任务的 base64 图片
-  preference?: "speed" | "quality", // 模型偏好
-  max_retries?: number,             // 回退尝试次数（默认: 3）
-  keep_alive?: number | string      // 保持模型加载（默认: 0）
+  text?: string,
+  images_b64?: string[],
+  preference?: "speed" | "quality",
+  max_retries?: number,
+  keep_alive?: number | string,
+  context?: {
+    hasAudio?: boolean,
+    transcript?: string,
+    channel?: string
+  }
 }
 ```
 
-#### 输出 schema
+输出：
 
 ```typescript
 {
-  chosen_model: string,             // 选中的模型
-  task: string,                     // 解析后的任务类型
-  text?: string,                    // 响应文本
-  image_b64?: string,               // 生成的图片
+  chosen_model: string,
+  task: string,
+  text?: string,
+  image_b64?: string,
   diagnostics: {
-    candidates_tried: string[],     // 尝试过的模型
-    errors?: any[],                 // 遇到的错误
-    timings?: Record<string, number> // 性能指标
+    candidates_tried: string[],
+    audio: {
+      hasAudio: boolean,
+      transcript_used: boolean,
+      transcript_len?: number,
+      channel?: string,
+      note?: string
+    },
+    errors?: any[],
+    timings?: Record<string, number>
   }
 }
 ```
 
-### 示例
+## 行为说明
 
-#### 视觉任务
-
-```json
-{
-  "tool": "ollama_route",
-  "input": {
-    "task": "vision",
-    "text": "这张图片里有什么？",
-    "images_b64": ["base64..."]
-  }
-}
-```
-
-#### 图像生成
-
-```json
-{
-  "tool": "ollama_route",
-  "input": {
-    "task": "image_generation",
-    "text": "一座未来风格的城市"
-  }
-}
-```
-
-#### 对话（质量优先）
-
-```json
-{
-  "tool": "ollama_route",
-  "input": {
-    "task": "auto",
-    "text": "解释量子计算",
-    "preference": "quality"
-  }
-}
-```
+- 如果 `context.transcript` 存在，插件会优先使用 transcript，而不是 `text`
+- 如果 `hasAudio = true` 但没有 transcript，也没有文本输入，插件会返回提示用户启用转写
+- 图片生成模型能力通过模型 family/name 做保守识别，再尝试调用兼容端点
+- 在高拥塞或低内存时，大模型会被下调到后面的候选位
 
 ## Skill
 
-插件包含一个 skill（`ollama-smart-router`），用于指示主模型何时使用路由工具。详见 [../skills/ollama-smart-router/SKILL.md](../skills/ollama-smart-router/SKILL.md)。
+项目自带 skill：[`skills/omni-router/SKILL.md`](../skills/omni-router/SKILL.md)
 
 ## 开发
 
 ```bash
-# 安装依赖
-npm install
-
-# 构建
 npm run build
-
-# 运行测试
 npm test
-
-# 类型检查
 npm run typecheck
-
-# 代码检查
 npm run lint
 ```
 
-## 测试
-
-### 单元测试
-
-```bash
-npm test
-```
-
-### 集成测试
-
-要运行集成测试，请确保 Ollama 正在运行：
-
-```bash
-# 启动 Ollama（如未运行）
-ollama serve
-
-# 运行测试
-npm test
-```
-
-## 故障排除
-
-### Ollama 未运行
-
-```
-Error: connect ECONNREFUSED 127.0.0.1:11434
-```
-
-**解决方案**: 使用 `ollama serve` 启动 Ollama
-
-### 没有可用模型
-
-```
-Error: No suitable models found
-```
-
-**解决方案**: 使用 `ollama pull <model-name>` 安装模型
-
-### 内存不足
-
-路由器会自动处理：
-1. 通过 `/api/ps` 检测运行中的模型
-2. 在内存压力下优先选择较小的模型
-3. 在 OOM 错误时回退到较小的模型
-
-### 模型不支持视觉
-
-如果视觉任务失败：
-- 确保你有支持视觉的模型（如 `llava`、`llama3-vision`）
-- 路由器会自动尝试其他模型
-
-## 架构
-
-```
-src/
-├── index.ts           # 入口文件
-├── handler.ts        # 工具处理器 (ollama_route)
-├── types/           # TypeScript 类型定义
-├── ollama/
-│   └── client.ts    # Ollama HTTP 客户端
-└── router/
-    └── chooseModel.ts # 模型选择逻辑
-```
-
-## 跨平台说明
-
-- 使用原生 `fetch`（Node.js 18+）
-- 使用 `os` 模块获取系统信息
-- 无平台特定依赖
-- 支持 Windows、macOS、Linux
-
 ## 相关链接
 
-- [Ollama](https://ollama.com/) - 本地 LLM 运行时
-- [OpenClaw](https://github.com/aorangehc/openclaw-ollama-router) - AI Agent 框架
-- [Ollama API 文档](https://github.com/ollama/ollama/blob/main/docs/api.md)
-- [OpenAI 兼容端点](https://github.com/ollama/ollama/blob/main/docs/openai.md)
+- [Ollama](https://ollama.com/)
+- [OpenClaw](https://github.com/openclaw-ollama)
+- [Ollama API Documentation](https://github.com/ollama/ollama/blob/main/docs/api.md)
 
 ## License
 

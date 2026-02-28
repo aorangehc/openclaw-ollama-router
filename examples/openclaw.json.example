@@ -44,10 +44,9 @@
   "messages": {
     "tts": {
       "auto": "inbound",
-      "description": "Auto reply with voice when user sends voice",
       "provider": "edge",
       "voice": "en-US-AriaNeural",
-      "description": "Use Edge TTS (no API key required)"
+      "description": "Use Edge TTS and auto reply with voice when the user sends voice"
     }
   },
   "examples": {

@@ -211,6 +211,26 @@ describe('OllamaClient', () => {
       expect(result.hasVision).toBe(true);
     });
 
+    it('should detect image generation models by name', async () => {
+      const mockResponse = {
+        model: 'flux:latest',
+        details: {
+          family: 'flux',
+          families: ['flux'],
+          parameter_size: '12B',
+          quantization_level: 'Q4_0',
+        },
+      };
+
+      vi.mocked(fetch).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve(mockResponse),
+      } as Response);
+
+      const result = await client.getModelCapabilities('flux:latest');
+      expect(result.hasImageGeneration).toBe(true);
+    });
+
     it('should return default capabilities on error', async () => {
       vi.mocked(fetch).mockRejectedValueOnce(new Error('Network error'));
 
@@ -231,6 +251,27 @@ describe('OllamaClient', () => {
       await expect(
         client.listModels()
       ).rejects.toThrow();
+    });
+  });
+
+  describe('generateImage', () => {
+    it('should extract base64 image data from the generate fallback response', async () => {
+      vi.mocked(fetch)
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 404,
+          statusText: 'Not Found',
+          json: () => Promise.resolve({ error: 'missing endpoint' }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            response: 'data:image/png;base64,ZmFrZS1pbWFnZS1ieXRlcw==',
+          }),
+        } as Response);
+
+      const result = await client.generateImage('flux:latest', 'draw a cat');
+      expect(result).toEqual({ b64_json: 'ZmFrZS1pbWFnZS1ieXRlcw==' });
     });
   });
 });

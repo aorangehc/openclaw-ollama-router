@@ -6,6 +6,7 @@ import {
   filterByCapability,
   chooseModel,
   getAvailableMemoryRatio,
+  shouldDemote,
 } from '../src/router/chooseModel.js';
 import type { CandidateModel, RouterOptions } from '../src/types/index.js';
 
@@ -120,10 +121,25 @@ describe('Router', () => {
         task: 'chat',
         preference: 'quality',
         _runningProcesses: [],
+        _availableMemoryRatio: 0.9,
       };
 
       const result = chooseModel(baseCandidates, options);
       expect(result[0].parameterSize).toBe('13B');
+    });
+
+    it('should prefer smaller models for quality requests under congestion', () => {
+      const options: RouterOptions = {
+        task: 'chat',
+        preference: 'quality',
+        _runningProcesses: [
+          { id: '1', model: 'busy:70b', size: 7_000_000_000, duration: 1000 },
+        ],
+        _availableMemoryRatio: 0.9,
+      };
+
+      const result = chooseModel(baseCandidates, options);
+      expect(result[0].parameterSize).toBe('7B');
     });
 
     it('should prioritize non-running models', () => {
@@ -143,6 +159,7 @@ describe('Router', () => {
         task: 'chat',
         preference: 'speed',
         _runningProcesses: [{ id: '1', model: 'llama2:7b', size: 4000000000, duration: 1000 }],
+        _availableMemoryRatio: 0.9,
       };
 
       const result = chooseModel(candidatesWithRunning, options);
@@ -166,6 +183,7 @@ describe('Router', () => {
         task: 'chat',
         preference: 'speed',
         allowedModels: ['llama2:7b'],
+        _availableMemoryRatio: 0.9,
       };
 
       const result = chooseModel(baseCandidates, options);
@@ -178,10 +196,61 @@ describe('Router', () => {
         task: 'vision',
         preference: 'speed',
         allowedModels: ['nonexistent'],
+        _availableMemoryRatio: 0.9,
       };
 
       const result = chooseModel(baseCandidates, options);
       expect(result).toHaveLength(0);
+    });
+
+    it('should keep demoted large models behind safer choices when memory is low', () => {
+      const lowMemoryCandidates: CandidateModel[] = [
+        {
+          ...baseCandidates[0],
+          name: 'llama2:7b',
+          parameterSize: '7B',
+        },
+        {
+          ...baseCandidates[1],
+          name: 'llama2:33b',
+          parameterSize: '33B',
+          size: 16_000_000_000,
+        },
+      ];
+
+      const options: RouterOptions = {
+        task: 'chat',
+        preference: 'quality',
+        _runningProcesses: [],
+        _availableMemoryRatio: 0.2,
+      };
+
+      const result = chooseModel(lowMemoryCandidates, options);
+      expect(result[0].name).toBe('llama2:7b');
+      expect(result[1].name).toBe('llama2:33b');
+    });
+
+    it('should route image generation only to capable models', () => {
+      const imageCandidates: CandidateModel[] = [
+        {
+          ...baseCandidates[0],
+          name: 'flux:latest',
+          hasImageGeneration: true,
+          parameterSize: '12B',
+        },
+        baseCandidates[0],
+      ];
+
+      const options: RouterOptions = {
+        task: 'image_generation',
+        preference: 'speed',
+        _runningProcesses: [],
+        _availableMemoryRatio: 0.9,
+      };
+
+      const result = chooseModel(imageCandidates, options);
+      expect(result).toHaveLength(1);
+      expect(result[0].name).toBe('flux:latest');
     });
   });
 
@@ -190,6 +259,30 @@ describe('Router', () => {
       const ratio = getAvailableMemoryRatio();
       expect(ratio).toBeGreaterThan(0);
       expect(ratio).toBeLessThanOrEqual(1);
+    });
+  });
+
+  describe('shouldDemote', () => {
+    const largeRunningModel: CandidateModel = {
+      name: 'llama2:70b',
+      size: 40_000_000_000,
+      hasVision: false,
+      hasImageGeneration: false,
+      parameterSize: '70B',
+      quantizationLevel: 'Q4_0',
+      isRunning: true,
+    };
+
+    it('demotes large models when memory is low', () => {
+      expect(shouldDemote(largeRunningModel, 0.2, 0.1)).toBe(true);
+    });
+
+    it('demotes running models when congestion is severe', () => {
+      expect(shouldDemote(largeRunningModel, 0.8, 0.9)).toBe(true);
+    });
+
+    it('keeps smaller idle models available', () => {
+      expect(shouldDemote({ ...largeRunningModel, parameterSize: '7B', isRunning: false }, 0.8, 0.1)).toBe(false);
     });
   });
 });
