@@ -1,7 +1,7 @@
 {
   "plugins": [
     {
-      "name": "openclaw-ollama-router",
+      "name": "openclaw-omni-router",
       "enabled": true,
       "config": {
         "baseUrl": "http://127.0.0.1:11434",
@@ -13,23 +13,88 @@
     }
   ],
   "skills": [
-    "ollama-smart-router"
+    "omni-router"
   ],
   "agents": [
     {
-      "name": "smart-assistant",
+      "name": "omni-assistant",
       "model": "mini-max",
-      "plugins": ["openclaw-ollama-router"],
-      "skills": ["ollama-smart-router"]
+      "plugins": ["openclaw-omni-router"],
+      "skills": ["omni-router"]
     }
   ],
+  "tools": {
+    "media": {
+      "audio": {
+        "enabled": true,
+        "provider": "cli",
+        "description": "Audio transcription - local CLI preferred",
+        "cli": {
+          "command": "whisper-cli",
+          "args": ["-f", "{{MediaPath}}"],
+          "description": "Use whisper-cli for local transcription"
+        },
+        "fallback": {
+          "provider": "google",
+          "description": "Fallback to Google Cloud Speech if CLI fails"
+        }
+      }
+    }
+  },
+  "messages": {
+    "tts": {
+      "auto": "inbound",
+      "description": "Auto reply with voice when user sends voice",
+      "provider": "edge",
+      "voice": "en-US-AriaNeural",
+      "description": "Use Edge TTS (no API key required)"
+    }
+  },
   "examples": {
-    "description": "Example OpenClaw configuration for Ollama Router plugin",
+    "description": "Example OpenClaw configuration for Omni Router plugin with voice support",
     "notes": [
-      "1. Ensure Ollama is running on your machine",
+      "1. Ensure Ollama is running on your machine (ollama serve)",
       "2. Link this plugin: npm link in the plugin directory, then use in OpenClaw",
       "3. Configure allowedModels to restrict which models can be used",
-      "4. Set preference to 'quality' if you want larger models by default"
-    ]
+      "4. Set preference to 'quality' if you want larger models by default",
+      "5. Voice input requires tools.media.audio to be enabled",
+      "6. Voice output requires messages.tts.auto to be configured"
+    ],
+    "alternativeConfigs": {
+      "taggedTts": {
+        "description": "Alternative: Use tagged TTS mode for manual control",
+        "messages": {
+          "tts": {
+            "auto": "tagged"
+          }
+        }
+      },
+      "localWhisperCpp": {
+        "description": "Alternative: Use whisper.cpp for local transcription",
+        "tools": {
+          "media": {
+            "audio": {
+              "cli": {
+                "command": "./whisper.cpp/main",
+                "args": ["-m", "./whisper.cpp/models/ggml-base.bin", "-f", "{{MediaPath}}"]
+              }
+            }
+          }
+        }
+      },
+      "providerTts": {
+        "description": "Alternative: Use OpenAI TTS with API key",
+        "messages": {
+          "tts": {
+            "provider": "openai",
+            "providerConfig": {
+              "apiKey": "${OPENAI_API_KEY}"
+            },
+            "voice": "alloy",
+            "model": "tts-1"
+          }
+        }
+      }
+    }
   }
 }

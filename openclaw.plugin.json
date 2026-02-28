@@ -1,14 +1,14 @@
 {
-  "name": "ollama-smart-router",
+  "name": "openclaw-omni-router",
   "version": "1.0.0",
-  "description": "Intelligent Ollama model router with resource awareness for OpenClaw",
+  "description": "Intelligent Ollama model router with resource awareness and voice support for OpenClaw",
   "main": "dist/index.js",
   "skills": [
-    "skills/ollama-smart-router/SKILL.md"
+    "skills/omni-router/SKILL.md"
   ],
   "tools": [
     {
-      "name": "ollama_route",
+      "name": "omni_route",
       "description": "Route to the best available Ollama model based on task type and system resources. Automatically handles vision, chat, and image generation tasks.",
       "inputSchema": {
         "type": "object",
@@ -45,6 +45,24 @@
             ],
             "default": 0,
             "description": "Model keep-alive duration in seconds or duration string (e.g., '2m'). Use 0 to release immediately after use."
+          },
+          "context": {
+            "type": "object",
+            "properties": {
+              "hasAudio": {
+                "type": "boolean",
+                "description": "Whether the input contains audio/voice"
+              },
+              "transcript": {
+                "type": "string",
+                "description": "Transcribed text from audio input (provided by tools.media.audio)"
+              },
+              "channel": {
+                "type": "string",
+                "description": "Message channel: telegram, feishu, discord, etc."
+              }
+            },
+            "description": "Context information about the input source"
           }
         },
         "required": ["task"]
