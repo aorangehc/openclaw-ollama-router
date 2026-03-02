@@ -2,6 +2,7 @@
 
 import { createClient } from './ollama/client.js';
 import { chooseModel, detectTaskType } from './router/chooseModel.js';
+import { readHardwareSnapshot } from './system/hardware.js';
 import type {
   AudioDiagnostics,
   PluginConfig,
@@ -9,6 +10,13 @@ import type {
   OmniRouteResponse,
   CandidateModel,
   Diagnostics,
+  InspectInput,
+  InspectModel,
+  OmniInspectResponse,
+  RunInput,
+  OmniRunResponse,
+  TaskType,
+  OllamaProcess,
 } from './types/index.js';
 
 const AUDIO_TRANSCRIPTION_HINT =
@@ -59,6 +67,381 @@ function buildAudioDiagnostics(input: ToolInput): AudioDiagnostics {
   };
 }
 
+function createDiagnostics(input: { text?: string; context?: ToolInput['context'] }): Diagnostics {
+  return {
+    candidates_tried: [],
+    audio: buildAudioDiagnostics({
+      task: 'chat',
+      text: input.text,
+      context: input.context,
+    }),
+    errors: [],
+    timings: {},
+  };
+}
+
+function resolveTask(
+  task: TaskType | undefined,
+  text: string | undefined,
+  images_b64: string[] | undefined
+): TaskType {
+  if (!task || task === 'auto') {
+    return detectTaskType(text, images_b64);
+  }
+
+  return task;
+}
+
+function isModelAllowed(name: string, allowedModels?: string[]): boolean {
+  if (!allowedModels || allowedModels.length === 0) {
+    return true;
+  }
+
+  const modelBase = name.split(':')[0];
+  return allowedModels.some(allowed =>
+    name === allowed ||
+    name.startsWith(allowed) ||
+    allowed === modelBase
+  );
+}
+
+function isEmbeddingModel(name: string): boolean {
+  const modelLower = name.toLowerCase();
+  return modelLower.includes('embedding') ||
+    modelLower.includes('embed') ||
+    modelLower.includes('reranker') ||
+    modelLower.includes('bge') ||
+    modelLower.includes('bert');
+}
+
+function supportsResolvedTask(model: InspectModel, task: TaskType): boolean {
+  if (task === 'vision') {
+    return model.hasVision;
+  }
+  if (task === 'image_generation') {
+    return model.hasImageGeneration;
+  }
+  return !model.embedding;
+}
+
+async function collectModelInventory(
+  config: PluginConfig,
+  task: TaskType
+): Promise<{
+  diagnostics: Diagnostics;
+  models: InspectModel[];
+  candidates: CandidateModel[];
+  runningModels: OllamaProcess[];
+}> {
+  const startedAt = Date.now();
+  const diagnostics = createDiagnostics({});
+  const client = createClient({
+    baseUrl: config.baseUrl || 'http://127.0.0.1:11434',
+    requestTimeout: config.requestTimeout || 120000,
+  });
+
+  diagnostics.timings!.fetch_models_start = Date.now() - startedAt;
+
+  const [tagsResponse, psResponse] = await Promise.all([
+    client.listModels(),
+    client.listRunning(),
+  ]);
+
+  diagnostics.timings!.fetch_models_end = Date.now() - startedAt;
+
+  const runningModels = psResponse.models || [];
+  const models: InspectModel[] = [];
+
+  for (const model of tagsResponse.models) {
+    const allowed = isModelAllowed(model.name, config.allowedModels);
+    const embedding = isEmbeddingModel(model.name);
+    const running = runningModels.find(process => process.model === model.name);
+
+    try {
+      const inspection = await client.inspectModel(model.name);
+      models.push({
+        name: model.name,
+        modifiedAt: model.modified_at,
+        digest: model.digest,
+        size: model.size,
+        hasVision: inspection.hasVision,
+        hasImageGeneration: inspection.hasImageGeneration,
+        parameterSize: inspection.parameterSize,
+        quantizationLevel: inspection.quantizationLevel,
+        isRunning: Boolean(running),
+        runningSize: running?.size,
+        allowed,
+        embedding,
+        supportsResolvedTask: false,
+        family: inspection.family,
+        families: inspection.families,
+      });
+    } catch (err) {
+      const error = err as { message?: string };
+      diagnostics.errors!.push({
+        model: model.name,
+        message: error.message || 'Failed to inspect model',
+      });
+
+      models.push({
+        name: model.name,
+        modifiedAt: model.modified_at,
+        digest: model.digest,
+        size: model.size,
+        hasVision: false,
+        hasImageGeneration: false,
+        parameterSize: 'unknown',
+        quantizationLevel: 'unknown',
+        isRunning: Boolean(running),
+        runningSize: running?.size,
+        allowed,
+        embedding,
+        supportsResolvedTask: false,
+        family: undefined,
+        families: [],
+      });
+    }
+  }
+
+  for (const model of models) {
+    model.supportsResolvedTask = supportsResolvedTask(model, task);
+  }
+
+  diagnostics.timings!.build_candidates = Date.now() - startedAt;
+
+  const candidates = models
+    .filter(model => model.allowed)
+    .filter(model => task === 'image_generation' || !model.embedding)
+    .map(model => ({
+      name: model.name,
+      size: model.size,
+      hasVision: model.hasVision,
+      hasImageGeneration: model.hasImageGeneration,
+      parameterSize: model.parameterSize,
+      quantizationLevel: model.quantizationLevel,
+      isRunning: model.isRunning,
+      runningSize: model.runningSize,
+    }));
+
+  return {
+    diagnostics,
+    models,
+    candidates,
+    runningModels,
+  };
+}
+
+async function executeModelRequest(
+  input: {
+    model: string;
+    task: TaskType;
+    text?: string;
+    images_b64?: string[];
+    keep_alive?: number | string;
+  },
+  config: PluginConfig
+): Promise<{ text?: string; image_b64?: string }> {
+  const client = createClient({
+    baseUrl: config.baseUrl || 'http://127.0.0.1:11434',
+    requestTimeout: config.requestTimeout || 120000,
+  });
+
+  if (input.task === 'vision') {
+    const result = await client.chat(
+      input.model,
+      [{
+        role: 'user',
+        content: input.text || 'Describe this image',
+        images: input.images_b64,
+      }],
+      input.keep_alive ?? config.defaultKeepAlive ?? 0
+    );
+
+    return { text: result.message.content };
+  }
+
+  if (input.task === 'image_generation') {
+    const result = await client.generateImage(
+      input.model,
+      input.text || 'Generate an image',
+      input.keep_alive ?? config.defaultKeepAlive ?? 0
+    );
+
+    if (result.b64_json) {
+      return { image_b64: result.b64_json };
+    }
+
+    throw new Error('Image generation endpoint returned no image payload');
+  }
+
+  const messages = input.text
+    ? [{ role: 'user', content: input.text }]
+    : [];
+  const result = await client.chat(
+    input.model,
+    messages,
+    input.keep_alive ?? config.defaultKeepAlive ?? 0
+  );
+
+  return { text: result.message.content };
+}
+
+export async function handleOmniInspect(
+  input: InspectInput,
+  config: PluginConfig
+): Promise<OmniInspectResponse> {
+  const startTime = Date.now();
+  const transcript = normalizeText(input.context?.transcript);
+  const directText = normalizeText(input.text);
+  const effectiveText = transcript ?? directText;
+  const task = resolveTask(input.task, effectiveText, input.images_b64);
+
+  try {
+    const [hardware, inventory] = await Promise.all([
+      readHardwareSnapshot(),
+      collectModelInventory(config, task),
+    ]);
+
+    const recommendationInput = {
+      task,
+      text: effectiveText,
+      images_b64: input.images_b64,
+      preference: input.preference ?? config.defaultPreference ?? 'speed',
+      allowedModels: config.allowedModels,
+      _runningProcesses: inventory.runningModels,
+      _availableMemoryRatio: hardware.availableMemoryRatio,
+    };
+
+    const recommendedModels = chooseModel(inventory.candidates, recommendationInput)
+      .map(model => model.name);
+
+    inventory.diagnostics.timings = {
+      ...(inventory.diagnostics.timings || {}),
+      completed: Date.now() - startTime,
+    };
+
+    return {
+      task,
+      text: effectiveText,
+      summary: {
+        totalModels: inventory.models.length,
+        allowedModels: inventory.models.filter(model => model.allowed).length,
+        runningModels: inventory.models.filter(model => model.isRunning).length,
+        recommendedModels: recommendedModels.length,
+      },
+      hardware,
+      models: inventory.models,
+      recommended_models: recommendedModels,
+      diagnostics: inventory.diagnostics,
+    };
+  } catch (err) {
+    const error = err as { message?: string };
+    return {
+      task,
+      text: effectiveText,
+      summary: {
+        totalModels: 0,
+        allowedModels: 0,
+        runningModels: 0,
+        recommendedModels: 0,
+      },
+      hardware: await readHardwareSnapshot(),
+      models: [],
+      recommended_models: [],
+      diagnostics: {
+        ...createDiagnostics(input),
+        timings: {
+          completed: Date.now() - startTime,
+        },
+        errors: [
+          { message: error.message || 'Fatal error' },
+        ],
+      },
+    };
+  }
+}
+
+export async function handleOmniRun(
+  input: RunInput,
+  config: PluginConfig
+): Promise<OmniRunResponse> {
+  const startTime = Date.now();
+  const transcript = normalizeText(input.context?.transcript);
+  const directText = normalizeText(input.text);
+  const effectiveText = transcript ?? directText;
+  const task = resolveTask(input.task, effectiveText, input.images_b64);
+  const diagnostics = createDiagnostics(input);
+
+  if (diagnostics.audio.hasAudio && !effectiveText && (!input.images_b64 || input.images_b64.length === 0)) {
+    diagnostics.timings!.completed = Date.now() - startTime;
+    return {
+      chosen_model: '',
+      task,
+      text: AUDIO_TRANSCRIPTION_HINT,
+      diagnostics,
+    };
+  }
+
+  if (!input.model.trim()) {
+    diagnostics.timings!.completed = Date.now() - startTime;
+    diagnostics.errors!.push({ message: 'Model name is required' });
+    return {
+      chosen_model: '',
+      task,
+      diagnostics,
+    };
+  }
+
+  if (!isModelAllowed(input.model, config.allowedModels)) {
+    diagnostics.timings!.completed = Date.now() - startTime;
+    diagnostics.errors!.push({
+      model: input.model,
+      message: `Model '${input.model}' is not allowed by plugin configuration`,
+    });
+    return {
+      chosen_model: input.model,
+      task,
+      diagnostics,
+    };
+  }
+
+  diagnostics.candidates_tried.push(input.model);
+
+  try {
+    const result = await executeModelRequest({
+      model: input.model,
+      task,
+      text: effectiveText,
+      images_b64: input.images_b64,
+      keep_alive: input.keep_alive,
+    }, config);
+
+    diagnostics.timings!.completed = Date.now() - startTime;
+
+    return {
+      chosen_model: input.model,
+      task,
+      ...(result.text ? { text: result.text } : {}),
+      ...(result.image_b64 ? { image_b64: result.image_b64 } : {}),
+      diagnostics,
+    };
+  } catch (err) {
+    const error = err as { message?: string; status?: number };
+    diagnostics.timings!.completed = Date.now() - startTime;
+    diagnostics.errors!.push({
+      model: input.model,
+      message: error.message || 'Unknown error',
+      status: error.status,
+    });
+
+    return {
+      chosen_model: input.model,
+      task,
+      diagnostics,
+    };
+  }
+}
+
 /**
  * Main handler for omni_route tool
  */
@@ -70,23 +453,8 @@ export async function handleOmniRoute(
   const transcript = normalizeText(input.context?.transcript);
   const directText = normalizeText(input.text);
   const effectiveText = transcript ?? directText;
-  const diagnostics: Diagnostics = {
-    candidates_tried: [],
-    audio: buildAudioDiagnostics(input),
-    errors: [],
-    timings: {},
-  };
-
-  // Create Ollama client
-  const client = createClient({
-    baseUrl: config.baseUrl || 'http://127.0.0.1:11434',
-    requestTimeout: config.requestTimeout || 120000,
-  });
-
-  // Resolve task type
-  const task = input.task === 'auto'
-    ? detectTaskType(effectiveText, input.images_b64)
-    : input.task;
+  const diagnostics = createDiagnostics(input);
+  const task = resolveTask(input.task, effectiveText, input.images_b64);
 
   // Get keepAlive value
   const keepAlive = input.keep_alive ?? config.defaultKeepAlive ?? 0;
@@ -104,72 +472,12 @@ export async function handleOmniRoute(
   }
 
   try {
-    diagnostics.timings!.fetch_models_start = Date.now() - startTime;
-
-    // Fetch available models and running models in parallel
-    const [tagsResponse, psResponse] = await Promise.all([
-      client.listModels(),
-      client.listRunning(),
-    ]);
-
-    diagnostics.timings!.fetch_models_end = Date.now() - startTime;
-
-    // Build candidate models with capabilities
-    const candidates: CandidateModel[] = [];
-
-    for (const model of tagsResponse.models) {
-      // Skip if not in allowed list
-      if (config.allowedModels && config.allowedModels.length > 0) {
-        const modelBase = model.name.split(':')[0];
-        const isAllowed = config.allowedModels.some(allowed =>
-          model.name === allowed ||
-          model.name.startsWith(allowed) ||
-          allowed === modelBase
-        );
-        if (!isAllowed) {
-          continue;
-        }
-      }
-
-      // Skip embedding/reranker models for chat/vision tasks
-      const modelLower = model.name.toLowerCase();
-      const isEmbedding = modelLower.includes('embedding') ||
-        modelLower.includes('embed') ||
-        modelLower.includes('reranker') ||
-        modelLower.includes('bge') ||
-        modelLower.includes('bert');
-      if (isEmbedding && task !== 'image_generation') {
-        continue;
-      }
-
-      // Get model capabilities
-      const capabilities = await client.getModelCapabilities(model.name);
-
-      candidates.push({
-        name: model.name,
-        size: model.size,
-        hasVision: capabilities.hasVision,
-        hasImageGeneration: capabilities.hasImageGeneration,
-        parameterSize: capabilities.parameterSize,
-        quantizationLevel: capabilities.quantizationLevel,
-        isRunning: false, // Will be updated below
-      });
-    }
-
-    // Mark running models
-    const runningModels = psResponse.models || [];
-    for (const candidate of candidates) {
-      const running = runningModels.find(r => r.model === candidate.name);
-      if (running) {
-        candidate.isRunning = true;
-        candidate.runningSize = running.size;
-      }
-    }
-
-    diagnostics.timings!.build_candidates = Date.now() - startTime;
+    const inventory = await collectModelInventory(config, task);
+    diagnostics.errors = inventory.diagnostics.errors;
+    diagnostics.timings = { ...(inventory.diagnostics.timings || {}) };
 
     // Choose best model
-    const selectedModels = chooseModel(candidates, {
+    const selectedModels = chooseModel(inventory.candidates, {
       task,
       text: effectiveText,
       images_b64: input.images_b64,
@@ -177,7 +485,7 @@ export async function handleOmniRoute(
       maxRetries,
       keepAlive,
       allowedModels: config.allowedModels,
-      _runningProcesses: runningModels,
+      _runningProcesses: inventory.runningModels,
     });
 
     if (selectedModels.length === 0) {
@@ -200,67 +508,24 @@ export async function handleOmniRoute(
       const attemptStart = Date.now();
 
       try {
-        let result;
+        const result = await executeModelRequest({
+          model: model.name,
+          task,
+          text: effectiveText,
+          images_b64: input.images_b64,
+          keep_alive: keepAlive,
+        }, config);
 
-        if (task === 'vision') {
-          // Vision request
-          result = await client.chat(
-            model.name,
-            [{
-              role: 'user',
-              content: effectiveText || 'Describe this image',
-              images: input.images_b64,
-            }],
-            keepAlive
-          );
-          diagnostics.timings![`attempt_${model.name}`] = Date.now() - attemptStart;
-          diagnostics.timings!.completed = Date.now() - startTime;
+        diagnostics.timings![`attempt_${model.name}`] = Date.now() - attemptStart;
+        diagnostics.timings!.completed = Date.now() - startTime;
 
-          return {
-            chosen_model: model.name,
-            task,
-            text: result.message.content,
-            diagnostics,
-          };
-        } else if (task === 'image_generation') {
-          // Image generation request
-          const imgResult = await client.generateImage(
-            model.name,
-            effectiveText || 'Generate an image',
-            keepAlive
-          );
-
-          diagnostics.timings![`attempt_${model.name}`] = Date.now() - attemptStart;
-
-          if (imgResult.b64_json) {
-            diagnostics.timings!.completed = Date.now() - startTime;
-            return {
-              chosen_model: model.name,
-              task,
-              image_b64: imgResult.b64_json,
-              diagnostics,
-            };
-          } else {
-            // Image generation not supported, return error
-            throw new Error('Image generation not supported by this model');
-          }
-        } else {
-          // Chat request
-          const messages = effectiveText
-            ? [{ role: 'user', content: effectiveText }]
-            : [];
-
-          result = await client.chat(model.name, messages, keepAlive);
-          diagnostics.timings![`attempt_${model.name}`] = Date.now() - attemptStart;
-          diagnostics.timings!.completed = Date.now() - startTime;
-
-          return {
-            chosen_model: model.name,
-            task,
-            text: result.message.content,
-            diagnostics,
-          };
-        }
+        return {
+          chosen_model: model.name,
+          task,
+          ...(result.text ? { text: result.text } : {}),
+          ...(result.image_b64 ? { image_b64: result.image_b64 } : {}),
+          diagnostics,
+        };
       } catch (err) {
         const error = err as { message?: string; status?: number };
         diagnostics.errors = diagnostics.errors || [];

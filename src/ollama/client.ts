@@ -7,6 +7,7 @@ import type {
   OllamaPsResponse,
   PluginConfig,
   ApiError,
+  ModelInspection,
 } from '../types/index.js';
 
 export class OllamaClient {
@@ -24,6 +25,51 @@ export class OllamaClient {
 
   get timeout(): number {
     return this._timeout;
+  }
+
+  private inspectDetails(
+    name: string,
+    details: OllamaShowResponse['details']
+  ): ModelInspection {
+    const families = [details.family, ...(details.families || [])]
+      .filter((value): value is string => Boolean(value))
+      .map(value => value.toLowerCase());
+    const lowerName = name.toLowerCase();
+
+    const hasVision = families.some(family =>
+      family.includes('llava') ||
+      family.includes('vision') ||
+      family.includes('qwen3vl') ||
+      family.includes('deepseekocr')
+    ) ||
+      lowerName.includes('vision') ||
+      lowerName.includes('llava') ||
+      lowerName.includes('vl-') ||
+      lowerName.includes('-vl');
+
+    const imageGenerationHints = [
+      'flux',
+      'diffusion',
+      'stable-diffusion',
+      'stable_diffusion',
+      'sdxl',
+      'playground',
+      'juggernaut',
+    ];
+    const hasImageGeneration = families.some(family =>
+      imageGenerationHints.some(hint => family.includes(hint))
+    ) || imageGenerationHints.some(hint => lowerName.includes(hint));
+
+    return {
+      name,
+      size: 0,
+      family: details.family || undefined,
+      families,
+      hasVision,
+      hasImageGeneration,
+      parameterSize: details.parameter_size || 'unknown',
+      quantizationLevel: details.quantization_level || 'unknown',
+    };
   }
 
   /**
@@ -54,9 +100,18 @@ export class OllamaClient {
           message: `HTTP ${response.status}: ${response.statusText}`,
         };
         try {
-          const body = await response.json() as { error?: string };
-          if (body.error) {
+          const body = await response.json() as { error?: unknown; message?: unknown };
+          if (typeof body.error === 'string' && body.error) {
             error.message = body.error;
+          } else if (body.error && typeof body.error === 'object' && 'message' in body.error) {
+            const nestedMessage = (body.error as { message?: unknown }).message;
+            if (typeof nestedMessage === 'string' && nestedMessage) {
+              error.message = nestedMessage;
+            } else {
+              error.message = JSON.stringify(body.error);
+            }
+          } else if (typeof body.message === 'string' && body.message) {
+            error.message = body.message;
           }
         } catch {
           // Ignore JSON parse errors
@@ -110,45 +165,13 @@ export class OllamaClient {
   }> {
     try {
       const info = await this.showModel(name);
-      const details = info.details;
-      const families = [details.family, ...(details.families || [])]
-        .filter((value): value is string => Boolean(value))
-        .map(value => value.toLowerCase());
-      const lowerName = name.toLowerCase();
-
-      // Vision models typically have 'llava' family or vision in name
-      // Also check for qwen3vl, deepseekocr (OCR/vision models)
-      const hasVision = families.some(family =>
-        family.includes('llava') ||
-        family.includes('vision') ||
-        family.includes('qwen3vl') ||
-        family.includes('deepseekocr')
-      ) ||
-        lowerName.includes('vision') ||
-        lowerName.includes('llava') ||
-        lowerName.includes('vl-') ||
-        lowerName.includes('-vl');
-
-      // Image generation support cannot be discovered reliably from Ollama metadata,
-      // so use conservative heuristics that match common model families.
-      const imageGenerationHints = [
-        'flux',
-        'diffusion',
-        'stable-diffusion',
-        'stable_diffusion',
-        'sdxl',
-        'playground',
-        'juggernaut',
-      ];
-      const hasImageGeneration = families.some(family =>
-        imageGenerationHints.some(hint => family.includes(hint))
-      ) || imageGenerationHints.some(hint => lowerName.includes(hint));
+      const inspection = this.inspectDetails(name, info.details);
 
       return {
-        hasVision,
-        hasImageGeneration,
-        parameterSize: details.parameter_size || 'unknown',
-        quantizationLevel: details.quantization_level || 'unknown',
+        hasVision: inspection.hasVision,
+        hasImageGeneration: inspection.hasImageGeneration,
+        parameterSize: inspection.parameterSize,
+        quantizationLevel: inspection.quantizationLevel,
       };
     } catch {
       // Return default capabilities if show fails
@@ -159,6 +182,15 @@ export class OllamaClient {
         quantizationLevel: 'unknown',
       };
     }
+  }
+
+  async inspectModel(name: string): Promise<ModelInspection> {
+    const info = await this.showModel(name);
+    const inspection = this.inspectDetails(name, info.details);
+    return {
+      ...inspection,
+      size: info.size,
+    };
   }
 
   /**
@@ -232,9 +264,15 @@ export class OllamaClient {
     prompt: string,
     keepAlive?: number | string
   ): Promise<{ b64_json?: string; url?: string }> {
+    let lastError: unknown;
+
     // Try OpenAI compatibility endpoint first
     try {
-      return await this.request<{ b64_json?: string; url?: string }>('/v1/images/generations', {
+      const result = await this.request<{
+        b64_json?: string;
+        url?: string;
+        data?: Array<{ b64_json?: string; url?: string }>;
+      }>('/v1/images/generations', {
         method: 'POST',
         body: JSON.stringify({
           model,
@@ -243,7 +281,13 @@ export class OllamaClient {
           size: '1024x1024',
         }),
       }, 30000); // Longer timeout for image generation
-    } catch {
+      const normalized = this.extractImageGenerationResult(result);
+      if (normalized.b64_json || normalized.url) {
+        return normalized;
+      }
+      throw new Error('Image generation endpoint returned no image data');
+    } catch (error) {
+      lastError = error;
       // Fallback: try direct Ollama endpoint if available
       try {
         const result = await this.request<{ b64_json?: string; url?: string; response?: string }>('/api/generate', {
@@ -271,12 +315,34 @@ export class OllamaClient {
           }
         }
 
-        return {};
-      } catch {
-        // Return empty result - caller should handle graceful degradation
-        return {};
+        throw new Error('Image generation endpoint returned no image data');
+      } catch (fallbackError) {
+        throw fallbackError ?? lastError ?? new Error('Image generation failed');
       }
     }
+  }
+
+  private extractImageGenerationResult(result: {
+    b64_json?: string;
+    url?: string;
+    data?: Array<{ b64_json?: string; url?: string }>;
+  }): { b64_json?: string; url?: string } {
+    if (result.b64_json || result.url) {
+      return {
+        ...(result.b64_json ? { b64_json: result.b64_json } : {}),
+        ...(result.url ? { url: result.url } : {}),
+      };
+    }
+
+    const firstImage = result.data?.find(image => image.b64_json || image.url);
+    if (firstImage) {
+      return {
+        ...(firstImage.b64_json ? { b64_json: firstImage.b64_json } : {}),
+        ...(firstImage.url ? { url: firstImage.url } : {}),
+      };
+    }
+
+    return {};
   }
 }
 

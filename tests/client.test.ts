@@ -255,6 +255,20 @@ describe('OllamaClient', () => {
   });
 
   describe('generateImage', () => {
+    it('should extract base64 image data from the OpenAI-compatible response', async () => {
+      vi.mocked(fetch).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          data: [
+            { b64_json: 'openai-compatible-image' },
+          ],
+        }),
+      } as Response);
+
+      const result = await client.generateImage('flux:latest', 'draw a cat');
+      expect(result).toEqual({ b64_json: 'openai-compatible-image' });
+    });
+
     it('should extract base64 image data from the generate fallback response', async () => {
       vi.mocked(fetch)
         .mockResolvedValueOnce({
@@ -272,6 +286,31 @@ describe('OllamaClient', () => {
 
       const result = await client.generateImage('flux:latest', 'draw a cat');
       expect(result).toEqual({ b64_json: 'ZmFrZS1pbWFnZS1ieXRlcw==' });
+    });
+
+    it('should preserve the fallback error when image generation fails', async () => {
+      vi.mocked(fetch)
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 500,
+          statusText: 'Internal Server Error',
+          json: () => Promise.resolve({
+            error: { message: 'openai endpoint failed' },
+          }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 500,
+          statusText: 'Internal Server Error',
+          json: () => Promise.resolve({
+            error: 'mlx runner failed: model.norm.weight',
+          }),
+        } as Response);
+
+      await expect(client.generateImage('flux:latest', 'draw a cat')).rejects.toMatchObject({
+        message: 'mlx runner failed: model.norm.weight',
+        status: 500,
+      });
     });
   });
 });

@@ -72,6 +72,11 @@ export interface ModelCapability {
   quantizationLevel: string;
 }
 
+export interface ModelInspection extends ModelCapability {
+  family?: string;
+  families: string[];
+}
+
 export interface CandidateModel extends ModelCapability {
   isRunning: boolean;
   runningSize?: number;
@@ -96,6 +101,35 @@ export interface AudioContext {
   hasAudio?: boolean;
   transcript?: string;
   channel?: string;
+}
+
+export interface HardwareGpu {
+  name: string;
+  driverVersion?: string;
+  memoryTotalMiB?: number;
+  memoryFreeMiB?: number;
+  memoryUsedMiB?: number;
+}
+
+export interface HardwareSnapshot {
+  platform: string;
+  arch: string;
+  cpuCount: number;
+  totalMemory: number;
+  freeMemory: number;
+  availableMemoryRatio: number;
+  gpuCount: number;
+  gpus: HardwareGpu[];
+}
+
+export interface InspectModel extends CandidateModel {
+  modifiedAt: string;
+  digest: string;
+  allowed: boolean;
+  embedding: boolean;
+  supportsResolvedTask: boolean;
+  family?: string;
+  families: string[];
 }
 
 export interface AudioDiagnostics {
@@ -124,6 +158,25 @@ export interface OmniRouteResponse {
 
 export type OllamaRouteResponse = OmniRouteResponse;
 
+export interface OmniInspectSummary {
+  totalModels: number;
+  allowedModels: number;
+  runningModels: number;
+  recommendedModels: number;
+}
+
+export interface OmniInspectResponse {
+  task: TaskType;
+  text?: string;
+  summary: OmniInspectSummary;
+  hardware: HardwareSnapshot;
+  models: InspectModel[];
+  recommended_models: string[];
+  diagnostics: Diagnostics;
+}
+
+export interface OmniRunResponse extends OmniRouteResponse {}
+
 // ==================== Tool Handler Types ====================
 
 export interface ToolInput {
@@ -134,6 +187,18 @@ export interface ToolInput {
   max_retries?: number;
   keep_alive?: number | string;
   context?: AudioContext;
+}
+
+export interface InspectInput {
+  task?: TaskType;
+  text?: string;
+  images_b64?: string[];
+  preference?: Preference;
+  context?: AudioContext;
+}
+
+export interface RunInput extends ToolInput {
+  model: string;
 }
 
 // ==================== Utility Types ====================

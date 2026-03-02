@@ -1,16 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CandidateModel, PluginConfig } from '../src/types/index.js';
 
-const { mockClient, chooseModelMock, detectTaskTypeMock } = vi.hoisted(() => ({
+const { mockClient, chooseModelMock, detectTaskTypeMock, readHardwareSnapshotMock } = vi.hoisted(() => ({
   mockClient: {
     listModels: vi.fn(),
     listRunning: vi.fn(),
     getModelCapabilities: vi.fn(),
+    inspectModel: vi.fn(),
     chat: vi.fn(),
     generateImage: vi.fn(),
   },
   chooseModelMock: vi.fn(),
   detectTaskTypeMock: vi.fn(),
+  readHardwareSnapshotMock: vi.fn(),
 }));
 
 vi.mock('../src/ollama/client.js', () => ({
@@ -22,7 +24,11 @@ vi.mock('../src/router/chooseModel.js', () => ({
   detectTaskType: detectTaskTypeMock,
 }));
 
-import { handleOmniRoute, handleOllamaRoute } from '../src/handler.js';
+vi.mock('../src/system/hardware.js', () => ({
+  readHardwareSnapshot: readHardwareSnapshotMock,
+}));
+
+import { handleOmniInspect, handleOmniRoute, handleOmniRun, handleOllamaRoute } from '../src/handler.js';
 
 const config: PluginConfig = {
   baseUrl: 'http://127.0.0.1:11434',
@@ -61,11 +67,38 @@ describe('Handler Integration', () => {
       parameterSize: '7B',
       quantizationLevel: 'Q4_0',
     });
+    mockClient.inspectModel.mockResolvedValue({
+      name: 'qwen2.5:7b',
+      size: 4_000_000_000,
+      family: 'qwen',
+      families: ['qwen'],
+      hasVision: false,
+      hasImageGeneration: false,
+      parameterSize: '7B',
+      quantizationLevel: 'Q4_0',
+    });
     mockClient.chat.mockResolvedValue({
       message: { role: 'assistant', content: 'Hello from omni router' },
     });
     mockClient.generateImage.mockResolvedValue({ b64_json: 'base64-image' });
     chooseModelMock.mockReturnValue([makeCandidate()]);
+    readHardwareSnapshotMock.mockResolvedValue({
+      platform: 'linux',
+      arch: 'x64',
+      cpuCount: 16,
+      totalMemory: 32_000_000_000,
+      freeMemory: 16_000_000_000,
+      availableMemoryRatio: 0.5,
+      gpuCount: 1,
+      gpus: [
+        {
+          name: 'RTX 4050',
+          memoryTotalMiB: 6144,
+          memoryFreeMiB: 5800,
+          memoryUsedMiB: 344,
+        },
+      ],
+    });
   });
 
   it('exports both omni and legacy handler names', () => {
@@ -111,6 +144,16 @@ describe('Handler Integration', () => {
       parameterSize: '12B',
       quantizationLevel: 'Q4_0',
     });
+    mockClient.inspectModel.mockResolvedValue({
+      name: 'flux:latest',
+      size: 12_000_000_000,
+      family: 'flux',
+      families: ['flux'],
+      hasVision: false,
+      hasImageGeneration: true,
+      parameterSize: '12B',
+      quantizationLevel: 'Q4_0',
+    });
     chooseModelMock.mockReturnValue([candidate]);
 
     const response = await handleOmniRoute(
@@ -121,6 +164,51 @@ describe('Handler Integration', () => {
     expect(response.chosen_model).toBe('flux:latest');
     expect(response.image_b64).toBe('base64-image');
     expect(mockClient.generateImage).toHaveBeenCalledWith('flux:latest', 'draw a neon city', 0);
+  });
+
+  it('preserves the model error when image generation fails', async () => {
+    const candidate = makeCandidate({
+      name: 'x/flux2-klein:4b',
+      hasImageGeneration: true,
+      parameterSize: '8B',
+      size: 5_700_000_000,
+    });
+
+    mockClient.listModels.mockResolvedValue({
+      models: [
+        { name: candidate.name, modified_at: '2025-01-01', size: candidate.size, digest: 'sha256:flux-klein' },
+      ],
+    });
+    mockClient.getModelCapabilities.mockResolvedValue({
+      hasVision: false,
+      hasImageGeneration: true,
+      parameterSize: '8B',
+      quantizationLevel: 'FP4',
+    });
+    mockClient.inspectModel.mockResolvedValue({
+      name: candidate.name,
+      size: candidate.size,
+      family: 'flux',
+      families: ['flux'],
+      hasVision: false,
+      hasImageGeneration: true,
+      parameterSize: '8B',
+      quantizationLevel: 'FP4',
+    });
+    chooseModelMock.mockReturnValue([candidate]);
+    mockClient.generateImage.mockRejectedValue(new Error('mlx runner failed: model.norm.weight'));
+
+    const response = await handleOmniRoute(
+      { task: 'image_generation', text: 'draw a red square' },
+      config
+    );
+
+    expect(response.chosen_model).toBe(candidate.name);
+    expect(response.diagnostics.errors).toContainEqual({
+      model: candidate.name,
+      message: 'mlx runner failed: model.norm.weight',
+      status: undefined,
+    });
   });
 
   it('returns a structured no-model response when the router finds no candidates', async () => {
@@ -159,6 +247,27 @@ describe('Handler Integration', () => {
         parameterSize: '7B',
         quantizationLevel: 'Q4_0',
       });
+    mockClient.inspectModel
+      .mockResolvedValueOnce({
+        name: first.name,
+        size: first.size,
+        family: 'qwen',
+        families: ['qwen'],
+        hasVision: false,
+        hasImageGeneration: false,
+        parameterSize: '14B',
+        quantizationLevel: 'Q4_0',
+      })
+      .mockResolvedValueOnce({
+        name: second.name,
+        size: second.size,
+        family: 'qwen',
+        families: ['qwen'],
+        hasVision: false,
+        hasImageGeneration: false,
+        parameterSize: '7B',
+        quantizationLevel: 'Q4_0',
+      });
     chooseModelMock.mockReturnValue([first, second]);
     mockClient.chat
       .mockRejectedValueOnce(new Error('OOM'))
@@ -177,5 +286,66 @@ describe('Handler Integration', () => {
       message: 'OOM',
       status: undefined,
     });
+  });
+
+  it('returns model inventory and recommendations for omni_inspect', async () => {
+    const response = await handleOmniInspect(
+      { task: 'chat', text: 'Summarize the release notes', preference: 'quality' },
+      config
+    );
+
+    expect(response.task).toBe('chat');
+    expect(response.summary.totalModels).toBe(1);
+    expect(response.hardware.gpuCount).toBe(1);
+    expect(response.models[0]).toMatchObject({
+      name: 'qwen2.5:7b',
+      allowed: true,
+      supportsResolvedTask: true,
+    });
+    expect(response.recommended_models).toEqual(['qwen2.5:7b']);
+    expect(chooseModelMock).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({
+        task: 'chat',
+        preference: 'quality',
+      })
+    );
+  });
+
+  it('runs the explicitly selected model via omni_run', async () => {
+    const response = await handleOmniRun(
+      {
+        model: 'qwen2.5:7b',
+        task: 'chat',
+        text: 'Answer directly',
+      },
+      config
+    );
+
+    expect(response.chosen_model).toBe('qwen2.5:7b');
+    expect(response.text).toBe('Hello from omni router');
+    expect(response.diagnostics.candidates_tried).toEqual(['qwen2.5:7b']);
+  });
+
+  it('rejects disallowed models in omni_run before execution', async () => {
+    const response = await handleOmniRun(
+      {
+        model: 'llama3:8b',
+        task: 'chat',
+        text: 'Answer directly',
+      },
+      {
+        ...config,
+        allowedModels: ['qwen2.5:7b'],
+      }
+    );
+
+    expect(response.chosen_model).toBe('llama3:8b');
+    expect(response.text).toBeUndefined();
+    expect(response.diagnostics.errors).toContainEqual({
+      model: 'llama3:8b',
+      message: "Model 'llama3:8b' is not allowed by plugin configuration",
+    });
+    expect(mockClient.chat).not.toHaveBeenCalled();
   });
 });
