@@ -5,11 +5,19 @@
   "main": "dist/index.js",
   "type": "module",
   "types": "dist/index.d.ts",
+  "openclaw": {
+    "extensions": [
+      "./openclaw.extension.js"
+    ]
+  },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",
+    "install:openclaw": "bash scripts/openclaw-install.sh",
+    "test:openclaw": "bash scripts/openclaw-smoke-test.sh all",
+    "uninstall:openclaw": "bash scripts/openclaw-uninstall.sh",
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build"
@@ -38,6 +46,8 @@
   },
   "files": [
     "dist",
+    "openclaw.extension.js",
+    "scripts",
     "skills",
     "openclaw.plugin.json"
   ]

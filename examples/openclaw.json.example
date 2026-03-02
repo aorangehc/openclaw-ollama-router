@@ -1,28 +1,30 @@
 {
-  "plugins": [
-    {
-      "name": "openclaw-omni-router",
-      "enabled": true,
-      "config": {
-        "baseUrl": "http://127.0.0.1:11434",
-        "allowedModels": [],
-        "defaultPreference": "speed",
-        "defaultKeepAlive": 0,
-        "requestTimeout": 120000
+  "plugins": {
+    "load": {
+      "paths": [
+        "/absolute/path/to/openclaw-ollama-router"
+      ]
+    },
+    "entries": {
+      "openclaw-omni-router": {
+        "enabled": true,
+        "config": {
+          "baseUrl": "http://127.0.0.1:11434",
+          "allowedModels": [],
+          "defaultPreference": "speed",
+          "defaultKeepAlive": 0,
+          "requestTimeout": 120000
+        }
       }
     }
-  ],
-  "skills": [
-    "omni-router"
-  ],
-  "agents": [
-    {
-      "name": "omni-assistant",
-      "model": "mini-max",
-      "plugins": ["openclaw-omni-router"],
-      "skills": ["omni-router"]
+  },
+  "skills": {
+    "entries": {
+      "omni-router": {
+        "enabled": true
+      }
     }
-  ],
+  },
   "tools": {
     "media": {
       "audio": {
@@ -53,7 +55,7 @@
     "description": "Example OpenClaw configuration for Omni Router plugin with voice support",
     "notes": [
       "1. Ensure Ollama is running on your machine (ollama serve)",
-      "2. Link this plugin: npm link in the plugin directory, then use in OpenClaw",
+      "2. Install this plugin into OpenClaw: openclaw plugins install /absolute/path/to/openclaw-ollama-router --link",
       "3. Configure allowedModels to restrict which models can be used",
       "4. Set preference to 'quality' if you want larger models by default",
       "5. Voice input requires tools.media.audio to be enabled",

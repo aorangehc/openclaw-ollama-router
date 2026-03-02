@@ -1,10 +1,11 @@
 {
+  "id": "openclaw-omni-router",
   "name": "openclaw-omni-router",
   "version": "1.0.0",
   "description": "Intelligent Ollama model router with resource awareness and voice support for OpenClaw",
   "main": "dist/index.js",
   "skills": [
-    "skills/omni-router/SKILL.md"
+    "skills"
   ],
   "tools": [
     {
