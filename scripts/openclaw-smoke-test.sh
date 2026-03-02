@@ -83,7 +83,7 @@ run_guided_case() {
 
   run_case \
     "guided_${task}" \
-    "请严格按这个流程执行，不要调用 omni_route：1. 先调用 omni_inspect，参数为 task=${task}，text='${text}'${extra}。2. 从 recommended_models 里选择第一个模型；如果 recommended_models 为空，就从 models 里选择第一个 allowed=true 且 supportsResolvedTask=true 的模型。3. 调用 omni_run，传入你选中的 model、task=${task}、text='${text}'${extra}。4. 不要解释，只执行工具。" \
+    "请严格按这个流程执行，不要调用 omni_route，也不要在失败后重试第二个模型：1. 先调用 omni_inspect，参数为 task=${task}，text='${text}'${extra}。2. 如果 recommended_models 非空，必须使用 recommended_models[0]，并调用 omni_run 时设置 use_recommended_model=true；如果 recommended_models 为空，就从 models 里选择第一个 allowed=true 且 supportsResolvedTask=true 的模型，并调用 omni_run。3. 调用 omni_run，传入 model、task=${task}、text='${text}'${extra}。4. 如果 omni_run 返回错误，立即停止，不要再调用任何其他模型。5. 不要解释，只执行工具。" \
     "omni_inspect" \
     "omni_run"
 }
@@ -92,7 +92,7 @@ openclaw health >/dev/null
 
 case "${MODE}" in
   chat)
-    run_route_case "chat" "hello from OpenClaw chat smoke test"
+    run_route_case "chat" "Reply with exactly CHAT_SMOKE_OK"
     ;;
   vision)
     run_route_case "vision" "Describe this image briefly."
@@ -101,7 +101,7 @@ case "${MODE}" in
     run_route_case "image_generation" "Draw a minimal red square icon."
     ;;
   guided_chat)
-    run_guided_case "chat" "hello from OpenClaw guided chat smoke test"
+    run_guided_case "chat" "Reply with exactly GUIDED_CHAT_OK"
     ;;
   guided_vision)
     run_guided_case "vision" "Describe this image briefly."
@@ -110,10 +110,10 @@ case "${MODE}" in
     run_guided_case "image_generation" "Draw a minimal red square icon."
     ;;
   all)
-    run_route_case "chat" "hello from OpenClaw chat smoke test"
+    run_route_case "chat" "Reply with exactly CHAT_SMOKE_OK"
     run_route_case "vision" "Describe this image briefly."
     run_route_case "image_generation" "Draw a minimal red square icon."
-    run_guided_case "chat" "hello from OpenClaw guided chat smoke test"
+    run_guided_case "chat" "Reply with exactly GUIDED_CHAT_OK"
     run_guided_case "vision" "Describe this image briefly."
     run_guided_case "image_generation" "Draw a minimal red square icon."
     ;;

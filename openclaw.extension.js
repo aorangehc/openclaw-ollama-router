@@ -47,6 +47,21 @@ const omniRunParameters = Type.Object(
   {
     model: Type.String({ description: 'Exact Ollama model name to execute' }),
     ...sharedInputFields,
+    preference: Type.Optional(
+      Type.Union([Type.Literal('speed'), Type.Literal('quality')], {
+        description: 'Recommendation preference used when enforcing the primary recommended model',
+      })
+    ),
+    use_recommended_model: Type.Optional(
+      Type.Boolean({
+        description: 'Force execution of recommended_models[0] for this request, ignoring manual model selection',
+      })
+    ),
+    allow_recommendation_override: Type.Optional(
+      Type.Boolean({
+        description: 'Allow overriding a previously enforced recommended_models[0] lock for the same request',
+      })
+    ),
     keep_alive: Type.Optional(
       Type.Union([
         Type.Number({ description: 'Keep-alive duration in seconds' }),
@@ -135,7 +150,7 @@ export default function register(api) {
       name: 'omni_run',
       label: 'Omni Run',
       description:
-        'Execute a specific Ollama model chosen by the main model, without automatic routing.',
+        'Execute a specific Ollama model, or force the primary recommended model from omni_inspect and lock the request to that choice.',
       parameters: omniRunParameters,
       async execute(_toolCallId, params) {
         const response = await handleOmniRun(params, normalizePluginConfig(api.pluginConfig));

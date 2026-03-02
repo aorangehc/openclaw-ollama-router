@@ -116,12 +116,14 @@ describe('OpenClaw extension entry', () => {
 
     await runTool.execute('tool-call-run', {
       model: 'qwen3:4b-instruct',
+      use_recommended_model: true,
       task: 'chat',
       text: 'hello',
     });
     expect(handleOmniRunMock).toHaveBeenCalledWith(
       {
         model: 'qwen3:4b-instruct',
+        use_recommended_model: true,
         task: 'chat',
         text: 'hello',
       },

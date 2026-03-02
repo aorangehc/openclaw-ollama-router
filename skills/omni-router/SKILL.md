@@ -30,9 +30,10 @@ Follow this order:
 1. Decide whether you can answer directly without local execution.
 2. If direct answering is sufficient, answer directly and do not call these tools.
 3. If local execution is needed, call `omni_inspect`.
-4. Choose a model from `recommended_models` or `models`.
-5. Call `omni_run`.
-6. Read the tool result and respond to the user.
+4. Read `recommended_models[0]`.
+5. Call `omni_run` with `use_recommended_model: true`.
+6. If that `omni_run` call fails, stop and surface the failure. Do not retry a second model unless the user explicitly asks.
+7. Read the tool result and respond to the user.
 
 Use `omni_route` only as a compatibility fallback when you explicitly want one-shot routing.
 
@@ -78,12 +79,14 @@ If the request came from audio and OpenClaw provides a transcript, pass:
 
 After `omni_inspect`, apply these rules:
 
-1. Prefer `recommended_models[0]` if it is suitable for the user request.
-2. If `recommended_models` is empty, choose the first model where:
+1. If `recommended_models` is not empty, you must use `recommended_models[0]`.
+2. When you call `omni_run`, set `use_recommended_model = true` so the tool enforces `recommended_models[0]` even if you are tempted to pick another model.
+3. If `recommended_models` is empty, choose the first model where:
    - `allowed = true`
    - `supportsResolvedTask = true`
-3. If you need a specific tradeoff, inspect `parameterSize`, `quantizationLevel`, `isRunning`, `hardware`, and the raw model list yourself.
-4. Do not choose models where `allowed = false`.
+4. If you need a specific tradeoff, inspect `parameterSize`, `quantizationLevel`, `isRunning`, `hardware`, and the raw model list yourself only to understand why the recommendation looks the way it does.
+5. Do not choose models where `allowed = false`.
+6. Do not retry a second local model after a failed `use_recommended_model = true` run unless the user explicitly asks for fallback behavior.
 
 ## `omni_run`
 
@@ -96,6 +99,7 @@ Example:
   "tool": "omni_run",
   "input": {
     "model": "qwen3-vl:4b",
+    "use_recommended_model": true,
     "task": "vision",
     "text": "Describe this screenshot briefly",
     "images_b64": ["..."]
@@ -138,16 +142,17 @@ If TTS mode is `tagged` and the conversation came from voice/audio, append `[[tt
 ### Example 1: Screenshot analysis
 
 1. Call `omni_inspect` with `task: "vision"` and `images_b64`.
-2. Choose the first suitable vision model.
+2. Use `recommended_models[0]`.
 3. Call `omni_run`.
-4. Summarize the result for the user.
+4. If it fails, report that failure and stop.
+5. Summarize the result for the user.
 
 ### Example 2: Image generation
 
 1. Call `omni_inspect` with `task: "image_generation"`.
 2. If there is no allowed image-generation model, tell the user directly.
-3. Otherwise call `omni_run`.
-4. If `diagnostics.errors` contains a runtime error, surface that as an environment/model failure, not as a plugin failure.
+3. Otherwise call `omni_run` with `use_recommended_model: true`.
+4. If `diagnostics.errors` contains a runtime error, surface that as an environment/model failure, not as a plugin failure, and do not retry another model.
 
 ### Example 3: Simple chat
 
