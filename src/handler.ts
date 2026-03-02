@@ -21,6 +21,8 @@ import type {
 
 const AUDIO_TRANSCRIPTION_HINT =
   "I received audio input but couldn't find a transcript. Enable tools.media.audio in OpenClaw or send text instead.";
+const RECOMMENDATION_LOCK_TTL_MS = 10 * 60 * 1000;
+const recommendationLocks = new Map<string, { model: string; expiresAt: number }>();
 
 function normalizeText(value?: string): string | undefined {
   const normalized = value?.trim();
@@ -92,6 +94,22 @@ function resolveTask(
   return task;
 }
 
+function buildRequestKey(task: TaskType, text?: string, images_b64?: string[]): string {
+  return JSON.stringify({
+    task,
+    text: text || '',
+    images_b64: images_b64 || [],
+  });
+}
+
+function pruneRecommendationLocks(now: number): void {
+  for (const [key, lock] of recommendationLocks.entries()) {
+    if (lock.expiresAt <= now) {
+      recommendationLocks.delete(key);
+    }
+  }
+}
+
 function isModelAllowed(name: string, allowedModels?: string[]): boolean {
   if (!allowedModels || allowedModels.length === 0) {
     return true;
@@ -121,7 +139,7 @@ function supportsResolvedTask(model: InspectModel, task: TaskType): boolean {
   if (task === 'image_generation') {
     return model.hasImageGeneration;
   }
-  return !model.embedding;
+  return !model.embedding && !model.hasImageGeneration;
 }
 
 async function collectModelInventory(
@@ -286,6 +304,33 @@ async function executeModelRequest(
   return { text: result.message.content };
 }
 
+async function resolveRecommendedModelName(
+  input: {
+    task: TaskType;
+    text?: string;
+    images_b64?: string[];
+    preference?: 'speed' | 'quality';
+  },
+  config: PluginConfig
+): Promise<string | undefined> {
+  const [hardware, inventory] = await Promise.all([
+    readHardwareSnapshot(),
+    collectModelInventory(config, input.task),
+  ]);
+
+  const recommendedModels = chooseModel(inventory.candidates, {
+    task: input.task,
+    text: input.text,
+    images_b64: input.images_b64,
+    preference: input.preference ?? config.defaultPreference ?? 'speed',
+    allowedModels: config.allowedModels,
+    _runningProcesses: inventory.runningModels,
+    _availableMemoryRatio: hardware.availableMemoryRatio,
+  });
+
+  return recommendedModels[0]?.name;
+}
+
 export async function handleOmniInspect(
   input: InspectInput,
   config: PluginConfig
@@ -371,6 +416,10 @@ export async function handleOmniRun(
   const effectiveText = transcript ?? directText;
   const task = resolveTask(input.task, effectiveText, input.images_b64);
   const diagnostics = createDiagnostics(input);
+  const now = Date.now();
+  const requestKey = buildRequestKey(task, effectiveText, input.images_b64);
+
+  pruneRecommendationLocks(now);
 
   if (diagnostics.audio.hasAudio && !effectiveText && (!input.images_b64 || input.images_b64.length === 0)) {
     diagnostics.timings!.completed = Date.now() - startTime;
@@ -382,7 +431,9 @@ export async function handleOmniRun(
     };
   }
 
-  if (!input.model.trim()) {
+  const requestedModel = input.model.trim();
+
+  if (!requestedModel && !input.use_recommended_model) {
     diagnostics.timings!.completed = Date.now() - startTime;
     diagnostics.errors!.push({ message: 'Model name is required' });
     return {
@@ -392,24 +443,80 @@ export async function handleOmniRun(
     };
   }
 
-  if (!isModelAllowed(input.model, config.allowedModels)) {
+  let selectedModel = requestedModel;
+
+  if (input.use_recommended_model) {
+    try {
+      const recommendedModel = await resolveRecommendedModelName({
+        task,
+        text: effectiveText,
+        images_b64: input.images_b64,
+        preference: input.preference,
+      }, config);
+
+      if (!recommendedModel) {
+        diagnostics.timings!.completed = Date.now() - startTime;
+        diagnostics.errors!.push({ message: 'No suitable recommended model found' });
+        return {
+          chosen_model: requestedModel,
+          task,
+          diagnostics,
+        };
+      }
+
+      selectedModel = recommendedModel;
+      diagnostics.fallback = `enforced recommended_models[0]=${recommendedModel}`;
+      recommendationLocks.set(requestKey, {
+        model: recommendedModel,
+        expiresAt: now + RECOMMENDATION_LOCK_TTL_MS,
+      });
+    } catch (err) {
+      const error = err as { message?: string };
+      diagnostics.timings!.completed = Date.now() - startTime;
+      diagnostics.errors!.push({
+        message: error.message || 'Failed to resolve recommended model',
+      });
+      return {
+        chosen_model: requestedModel,
+        task,
+        diagnostics,
+      };
+    }
+  } else {
+    const lock = recommendationLocks.get(requestKey);
+    if (lock && selectedModel !== lock.model && !input.allow_recommendation_override) {
+      diagnostics.timings!.completed = Date.now() - startTime;
+      diagnostics.errors!.push({
+        model: selectedModel,
+        message: `Model '${selectedModel}' is blocked for this request; recommended_models[0] is locked to '${lock.model}'`,
+      });
+      diagnostics.fallback = `recommendation lock=${lock.model}`;
+      return {
+        chosen_model: selectedModel,
+        task,
+        diagnostics,
+      };
+    }
+  }
+
+  if (!isModelAllowed(selectedModel, config.allowedModels)) {
     diagnostics.timings!.completed = Date.now() - startTime;
     diagnostics.errors!.push({
-      model: input.model,
-      message: `Model '${input.model}' is not allowed by plugin configuration`,
+      model: selectedModel,
+      message: `Model '${selectedModel}' is not allowed by plugin configuration`,
     });
     return {
-      chosen_model: input.model,
+      chosen_model: selectedModel,
       task,
       diagnostics,
     };
   }
 
-  diagnostics.candidates_tried.push(input.model);
+  diagnostics.candidates_tried.push(selectedModel);
 
   try {
     const result = await executeModelRequest({
-      model: input.model,
+      model: selectedModel,
       task,
       text: effectiveText,
       images_b64: input.images_b64,
@@ -419,7 +526,7 @@ export async function handleOmniRun(
     diagnostics.timings!.completed = Date.now() - startTime;
 
     return {
-      chosen_model: input.model,
+      chosen_model: selectedModel,
       task,
       ...(result.text ? { text: result.text } : {}),
       ...(result.image_b64 ? { image_b64: result.image_b64 } : {}),
@@ -429,13 +536,13 @@ export async function handleOmniRun(
     const error = err as { message?: string; status?: number };
     diagnostics.timings!.completed = Date.now() - startTime;
     diagnostics.errors!.push({
-      model: input.model,
+      model: selectedModel,
       message: error.message || 'Unknown error',
       status: error.status,
     });
 
     return {
-      chosen_model: input.model,
+      chosen_model: selectedModel,
       task,
       diagnostics,
     };

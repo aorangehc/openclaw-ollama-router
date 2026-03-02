@@ -327,6 +327,151 @@ describe('Handler Integration', () => {
     expect(response.diagnostics.candidates_tried).toEqual(['qwen2.5:7b']);
   });
 
+  it('enforces recommended_models[0] in omni_run when requested', async () => {
+    const recommended = makeCandidate({
+      name: 'deepseek-ocr:latest',
+      hasVision: true,
+      parameterSize: '3B',
+      size: 6_000_000_000,
+    });
+    const ignored = makeCandidate({
+      name: 'qwen3-vl:2b',
+      hasVision: true,
+      parameterSize: '2B',
+      size: 2_000_000_000,
+    });
+
+    mockClient.listModels.mockResolvedValue({
+      models: [
+        { name: recommended.name, modified_at: '2025-01-01', size: recommended.size, digest: 'sha256:ocr' },
+        { name: ignored.name, modified_at: '2025-01-01', size: ignored.size, digest: 'sha256:qwen-vl' },
+      ],
+    });
+    mockClient.inspectModel
+      .mockResolvedValueOnce({
+        name: recommended.name,
+        size: recommended.size,
+        family: 'deepseekocr',
+        families: ['deepseekocr'],
+        hasVision: true,
+        hasImageGeneration: false,
+        parameterSize: '3B',
+        quantizationLevel: 'F16',
+      })
+      .mockResolvedValueOnce({
+        name: ignored.name,
+        size: ignored.size,
+        family: 'qwen3vl',
+        families: ['qwen3vl'],
+        hasVision: true,
+        hasImageGeneration: false,
+        parameterSize: '2B',
+        quantizationLevel: 'Q4_K_M',
+      });
+    chooseModelMock.mockReturnValue([recommended, ignored]);
+    mockClient.chat.mockResolvedValue({
+      message: { role: 'assistant', content: 'Vision result' },
+    });
+
+    const response = await handleOmniRun(
+      {
+        model: ignored.name,
+        use_recommended_model: true,
+        task: 'vision',
+        text: 'Describe this image briefly.',
+        images_b64: ['base64'],
+      },
+      config
+    );
+
+    expect(response.chosen_model).toBe(recommended.name);
+    expect(response.text).toBe('Vision result');
+    expect(response.diagnostics.candidates_tried).toEqual([recommended.name]);
+    expect(response.diagnostics.fallback).toBe(`enforced recommended_models[0]=${recommended.name}`);
+    expect(mockClient.chat).toHaveBeenCalledWith(
+      recommended.name,
+      [{
+        role: 'user',
+        content: 'Describe this image briefly.',
+        images: ['base64'],
+      }],
+      0
+    );
+  });
+
+  it('rejects follow-up runs that try to override a recommendation lock', async () => {
+    const recommended = makeCandidate({
+      name: 'qwen3-vl:2b',
+      hasVision: true,
+      parameterSize: '2B',
+      size: 2_000_000_000,
+    });
+    const blocked = makeCandidate({
+      name: 'deepseek-ocr:latest',
+      hasVision: true,
+      parameterSize: '3B',
+      size: 6_000_000_000,
+    });
+
+    mockClient.listModels.mockResolvedValue({
+      models: [
+        { name: recommended.name, modified_at: '2025-01-01', size: recommended.size, digest: 'sha256:qwen-vl' },
+        { name: blocked.name, modified_at: '2025-01-01', size: blocked.size, digest: 'sha256:ocr' },
+      ],
+    });
+    mockClient.inspectModel
+      .mockResolvedValueOnce({
+        name: recommended.name,
+        size: recommended.size,
+        family: 'qwen3vl',
+        families: ['qwen3vl'],
+        hasVision: true,
+        hasImageGeneration: false,
+        parameterSize: '2B',
+        quantizationLevel: 'Q4_K_M',
+      })
+      .mockResolvedValueOnce({
+        name: blocked.name,
+        size: blocked.size,
+        family: 'deepseekocr',
+        families: ['deepseekocr'],
+        hasVision: true,
+        hasImageGeneration: false,
+        parameterSize: '3B',
+        quantizationLevel: 'F16',
+      });
+    chooseModelMock.mockReturnValue([recommended, blocked]);
+
+    await handleOmniRun(
+      {
+        model: recommended.name,
+        use_recommended_model: true,
+        task: 'vision',
+        text: 'Describe this image briefly.',
+        images_b64: ['base64'],
+      },
+      config
+    );
+
+    const response = await handleOmniRun(
+      {
+        model: blocked.name,
+        task: 'vision',
+        text: 'Describe this image briefly.',
+        images_b64: ['base64'],
+      },
+      config
+    );
+
+    expect(response.chosen_model).toBe(blocked.name);
+    expect(response.text).toBeUndefined();
+    expect(response.diagnostics.errors).toContainEqual({
+      model: blocked.name,
+      message: `Model '${blocked.name}' is blocked for this request; recommended_models[0] is locked to '${recommended.name}'`,
+    });
+    expect(mockClient.chat).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects disallowed models in omni_run before execution', async () => {
     const response = await handleOmniRun(
       {

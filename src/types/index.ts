@@ -199,6 +199,8 @@ export interface InspectInput {
 
 export interface RunInput extends ToolInput {
   model: string;
+  use_recommended_model?: boolean;
+  allow_recommendation_override?: boolean;
 }
 
 // ==================== Utility Types ====================
