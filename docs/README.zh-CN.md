@@ -1,126 +1,133 @@
 # OpenClaw Omni Router
 
-> 面向 OpenClaw 的 Ollama 多模态路由插件，支持资源感知与语音上下文
-
-[![npm version](https://img.shields.io/npm/v/openclaw-omni-router.svg)](https://www.npmjs.com/package/openclaw-omni-router)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue.svg)](https://www.typescriptlang.org/)
-[![Test](https://github.com/aorangehc/openclaw-omni-router/actions/workflows/test.yml/badge.svg)](https://github.com/aorangehc/openclaw-omni-router/actions)
+> 让 OpenClaw 主模型先查看本地 Ollama 能力，再自己选择模型执行的插件。
 
 [English](../README.md) | 中文
 
 ## 概述
 
-OpenClaw Omni Router 会根据任务类型、模型能力、运行中模型和系统内存情况，为请求挑选更合适的 Ollama 模型，并补充语音输入上下文：
+这个插件现在提供三个工具：
 
-- 文本对话、视觉理解、图像生成统一通过 `omni_route` 路由
-- 支持从 `tools.media.audio` 传入的 transcript 作为真实用户输入
-- 在资源紧张时降低大模型优先级，减少 OOM
-- 当语音消息没有 transcript 时，直接返回清晰提示，而不是盲目调用模型
+- `omni_inspect`：把本地 Ollama 模型列表、运行中模型、系统内存和可用 GPU 信息暴露给主模型
+- `omni_run`：按主模型指定的模型名直接执行
+- `omni_route`：兼容旧工作流，继续支持“一步路由并执行”
+
+推荐链路：
+
+1. 主模型先判断自己能不能直接回答。
+2. 如果需要本地多模态/本地模型能力，就调用 `omni_inspect`。
+3. 主模型根据 `recommended_models`、`models` 和硬件信息决定用哪个模型。
+4. 主模型调用 `omni_run`。
+5. 主模型读取工具返回结果，再组织给用户。
 
 ## 安装
 
 ```bash
-npm install openclaw-omni-router
+npm install
+npm run build
+npm run install:openclaw
 ```
 
-本地开发也可以使用：
+等价命令：
 
 ```bash
-npm link
-npm link openclaw-omni-router
+openclaw plugins install /absolute/path/to/openclaw-ollama-router --link
 ```
+
+## 卸载
+
+```bash
+npm run uninstall:openclaw
+```
+
+等价命令：
+
+```bash
+openclaw plugins uninstall openclaw-omni-router --force --keep-files
+```
+
+这里默认带 `--keep-files`，适合你现在这种 `--link` 安装方式，只会把 OpenClaw 里的安装记录和配置移除，不会删除当前仓库目录。
 
 ## 插件配置
 
 ```json
 {
-  "plugins": [
-    {
-      "name": "openclaw-omni-router",
-      "enabled": true,
-      "config": {
-        "baseUrl": "http://127.0.0.1:11434",
-        "allowedModels": [],
-        "defaultPreference": "speed",
-        "defaultKeepAlive": 0,
-        "requestTimeout": 120000
-      }
-    }
-  ],
-  "skills": ["omni-router"]
-}
-```
-
-## 语音输入
-
-如果你希望语音消息自动变成文本请求，需要在 OpenClaw 中启用 `tools.media.audio`。
-
-### 本地 CLI 转写
-
-```json
-{
-  "tools": {
-    "media": {
-      "audio": {
+  "plugins": {
+    "load": {
+      "paths": [
+        "/absolute/path/to/openclaw-ollama-router"
+      ]
+    },
+    "entries": {
+      "openclaw-omni-router": {
         "enabled": true,
-        "provider": "cli",
-        "cli": {
-          "command": "whisper-cli",
-          "args": ["-f", "{{MediaPath}}"]
+        "config": {
+          "baseUrl": "http://127.0.0.1:11434",
+          "allowedModels": [],
+          "defaultPreference": "speed",
+          "defaultKeepAlive": 0,
+          "requestTimeout": 120000
         }
       }
     }
-  }
-}
-```
-
-### 云端转写
-
-```json
-{
-  "tools": {
-    "media": {
-      "audio": {
-        "enabled": true,
-        "provider": "google",
-        "providerConfig": {
-          "apiKey": "your-api-key"
-        }
+  },
+  "skills": {
+    "entries": {
+      "omni-router": {
+        "enabled": true
       }
     }
   }
 }
 ```
 
-## 语音输出
+说明：
 
-语音回复仍由 OpenClaw 的 `messages.tts` 控制：
+- `allowedModels` 为空时会扫描所有本地 Ollama 模型
+- `allowedModels` 不为空时，`omni_run` 和 `omni_route` 只允许执行白名单里的模型
+- `defaultPreference` 会影响 `omni_inspect` 的推荐顺序和 `omni_route` 的路由顺序
 
-```json
-{
-  "messages": {
-    "tts": {
-      "auto": "inbound"
-    }
-  }
-}
-```
+## 工具说明
 
-如果使用 `tagged` 模式，则需要上层 agent 在回复中附加 `[[tts]]`。
+### `omni_inspect`
 
-## 工具
-
-### `omni_route`
+用于“让主模型先做判断”。
 
 输入：
 
-```typescript
+```ts
 {
-  task: "auto" | "chat" | "vision" | "image_generation",
+  task?: "auto" | "chat" | "vision" | "image_generation",
   text?: string,
   images_b64?: string[],
   preference?: "speed" | "quality",
-  max_retries?: number,
+  context?: {
+    hasAudio?: boolean,
+    transcript?: string,
+    channel?: string
+  }
+}
+```
+
+输出重点：
+
+- `task`：解析后的真实任务类型
+- `hardware`：系统内存、CPU 数量、NVIDIA GPU 显存快照
+- `models`：本地模型列表，以及 `allowed`、`supportsResolvedTask`、运行中状态、能力推断
+- `recommended_models`：旧路由器按当前策略给出的推荐顺序
+
+### `omni_run`
+
+用于“主模型已经决定好要跑哪个 Ollama 模型”。
+
+输入：
+
+```ts
+{
+  model: string,
+  task: "auto" | "chat" | "vision" | "image_generation",
+  text?: string,
+  images_b64?: string[],
   keep_alive?: number | string,
   context?: {
     hasAudio?: boolean,
@@ -130,55 +137,57 @@ npm link openclaw-omni-router
 }
 ```
 
-输出：
+输出重点：
 
-```typescript
-{
-  chosen_model: string,
-  task: string,
-  text?: string,
-  image_b64?: string,
-  diagnostics: {
-    candidates_tried: string[],
-    audio: {
-      hasAudio: boolean,
-      transcript_used: boolean,
-      transcript_len?: number,
-      channel?: string,
-      note?: string
-    },
-    errors?: any[],
-    timings?: Record<string, number>
-  }
-}
-```
+- `chosen_model`
+- `task`
+- `text` 或 `image_b64`
+- `diagnostics.errors` 中的真实 Ollama 运行错误
 
-## 行为说明
+### `omni_route`
 
-- 如果 `context.transcript` 存在，插件会优先使用 transcript，而不是 `text`
-- 如果 `hasAudio = true` 但没有 transcript，也没有文本输入，插件会返回提示用户启用转写
-- 图片生成模型能力通过模型 family/name 做保守识别，再尝试调用兼容端点
-- 在高拥塞或低内存时，大模型会被下调到后面的候选位
+兼容旧逻辑，内部仍然是“看模型 -> 选模型 -> 执行”，适合快速回归测试或保底场景。
 
-## Skill
+## Skill 策略
 
-项目自带 skill：[`skills/omni-router/SKILL.md`](../skills/omni-router/SKILL.md)
+项目自带的 skill 在 `skills/omni-router/SKILL.md`。
 
-## 开发
+建议策略：
+
+1. 主模型如果能直接答，就不要调用本地工具。
+2. 需要本地多模态或本地推理时，先调用 `omni_inspect`。
+3. 默认优先选 `recommended_models[0]`，但允许主模型结合 `models` 和硬件情况自己改判。
+4. 调用 `omni_run`。
+5. `omni_route` 只作为兼容或兜底。
+
+## 语音输入
+
+如果要让语音消息自动进入这套流程，需要在 OpenClaw 里启用 `tools.media.audio`。插件本身不做转写，只消费 transcript，并把音频上下文写进 diagnostics。
+
+## 开发与测试
 
 ```bash
-npm run build
 npm test
-npm run typecheck
-npm run lint
+npm run build
 ```
 
-## 相关链接
+真实 OpenClaw 联调：
 
-- [Ollama](https://ollama.com/)
-- [OpenClaw](https://github.com/openclaw-ollama)
-- [Ollama API Documentation](https://github.com/ollama/ollama/blob/main/docs/api.md)
+```bash
+# 旧的一步路由
+bash scripts/openclaw-smoke-test.sh chat
+bash scripts/openclaw-smoke-test.sh vision
+bash scripts/openclaw-smoke-test.sh image_generation
 
-## License
+# 新的 inspect -> run 链路
+bash scripts/openclaw-smoke-test.sh guided_chat
+bash scripts/openclaw-smoke-test.sh guided_vision
+bash scripts/openclaw-smoke-test.sh guided_image_generation
 
-MIT
+# 全部跑一遍
+npm run test:openclaw
+```
+
+`guided_*` 模式会直接从真实 OpenClaw session log 里提取 `omni_inspect` 和 `omni_run` 的 tool result。
+
+如果是生图任务，插件现在会把 Ollama 的原始错误透传给 OpenClaw；所以 Linux 上即使模型已安装，运行失败时你也能直接看见底层报错，而不是误判成插件问题。
