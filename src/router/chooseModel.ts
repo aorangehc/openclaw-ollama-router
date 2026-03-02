@@ -80,11 +80,24 @@ function supportsTask(model: CandidateModel, task: TaskType): boolean {
     case 'image_generation':
       return model.hasImageGeneration;
     case 'chat':
+      return !model.hasImageGeneration;
     case 'auto':
-      return true; // All models support chat
+      return !model.hasImageGeneration;
     default:
       return true;
   }
+}
+
+function getChatPriority(model: CandidateModel): number {
+  if (model.hasImageGeneration) {
+    return 2;
+  }
+
+  if (model.hasVision) {
+    return 1;
+  }
+
+  return 0;
 }
 
 /**
@@ -165,7 +178,8 @@ function analyzeCongestion(
 function sortCandidates(
   candidates: CandidateModel[],
   preference: 'speed' | 'quality',
-  congestion: number
+  congestion: number,
+  task: TaskType
 ): CandidateModel[] {
   const sorted = [...candidates];
 
@@ -173,6 +187,14 @@ function sortCandidates(
     // Running models get lower priority (we want to release them)
     if (a.isRunning && !b.isRunning) return 1;
     if (!a.isRunning && b.isRunning) return -1;
+
+    if (task === 'chat') {
+      const aChatPriority = getChatPriority(a);
+      const bChatPriority = getChatPriority(b);
+      if (aChatPriority !== bChatPriority) {
+        return aChatPriority - bChatPriority;
+      }
+    }
 
     if (preference === 'speed') {
       // For speed: smaller parameters first
@@ -287,8 +309,8 @@ export function chooseModel(
   }
 
   return [
-    ...sortCandidates(preferred, preference, congestion),
-    ...sortCandidates(demoted, 'speed', congestion),
+    ...sortCandidates(preferred, preference, congestion, actualTask),
+    ...sortCandidates(demoted, 'speed', congestion, actualTask),
   ];
 }
 

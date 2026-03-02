@@ -68,6 +68,22 @@ describe('Router', () => {
       expect(result).toHaveLength(2);
     });
 
+    it('should exclude image generation models from chat task', () => {
+      const result = filterByCapability([
+        ...candidates,
+        {
+          name: 'flux:latest',
+          size: 5700000000,
+          hasVision: false,
+          hasImageGeneration: true,
+          parameterSize: '8B',
+          quantizationLevel: 'FP4',
+          isRunning: false,
+        },
+      ], 'chat');
+      expect(result.map(model => model.name)).not.toContain('flux:latest');
+    });
+
     it('should filter by allowedModels whitelist', () => {
       const result = filterByCapability(candidates, 'chat', ['llama2']);
       expect(result).toHaveLength(1);
@@ -114,6 +130,18 @@ describe('Router', () => {
 
       const result = chooseModel(baseCandidates, options);
       expect(result[0].parameterSize).toBe('7B');
+    });
+
+    it('should prefer text-only models over vision models for chat', () => {
+      const options: RouterOptions = {
+        task: 'chat',
+        preference: 'speed',
+      };
+
+      const result = chooseModel(baseCandidates, options);
+      expect(result[0].name).toBe('llama2:7b');
+      expect(result[1].name).toBe('llama2:13b');
+      expect(result[2].name).toBe('llava:7b');
     });
 
     it('should sort by size descending for quality preference', () => {
@@ -251,6 +279,26 @@ describe('Router', () => {
       const result = chooseModel(imageCandidates, options);
       expect(result).toHaveLength(1);
       expect(result[0].name).toBe('flux:latest');
+    });
+
+    it('should not include image-generation models in chat recommendations', () => {
+      const options: RouterOptions = {
+        task: 'chat',
+        preference: 'speed',
+      };
+
+      const result = chooseModel([
+        ...baseCandidates,
+        {
+          ...baseCandidates[0],
+          name: 'flux:latest',
+          hasImageGeneration: true,
+          parameterSize: '8B',
+          size: 5_700_000_000,
+        },
+      ], options);
+
+      expect(result.map(model => model.name)).not.toContain('flux:latest');
     });
   });
 
