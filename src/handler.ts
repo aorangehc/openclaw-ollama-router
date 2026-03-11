@@ -1,5 +1,7 @@
 // Tool Handler - Main entry point for omni_route tool
 
+import { readFile } from 'node:fs/promises';
+import sharp from 'sharp';
 import { createClient } from './ollama/client.js';
 import { chooseModel, detectTaskType } from './router/chooseModel.js';
 import { readHardwareSnapshot } from './system/hardware.js';
@@ -27,6 +29,124 @@ const recommendationLocks = new Map<string, { model: string; expiresAt: number }
 function normalizeText(value?: string): string | undefined {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
+}
+
+function normalizeBase64Image(value?: string): string | undefined {
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    return undefined;
+  }
+
+  const withoutDataUrl = normalized.replace(/^data:[^;]+;base64,/i, '');
+  const withoutWhitespace = withoutDataUrl.replace(/\s+/g, '');
+  const standardBase64 = withoutWhitespace
+    .replace(/-/g, '+')
+    .replace(/_/g, '/');
+
+  if (!standardBase64 || /[^A-Za-z0-9+/=]/.test(standardBase64)) {
+    return undefined;
+  }
+
+  const paddingLength = (4 - (standardBase64.length % 4)) % 4;
+  const padded = standardBase64 + '='.repeat(paddingLength);
+
+  try {
+    const decoded = Buffer.from(padded, 'base64');
+    if (decoded.length === 0) {
+      return undefined;
+    }
+
+    return decoded.toString('base64');
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeImages(images_b64?: string[]): string[] | undefined {
+  if (!images_b64 || images_b64.length === 0) {
+    return undefined;
+  }
+
+  const normalized = images_b64
+    .map(image => normalizeBase64Image(image))
+    .filter((image): image is string => Boolean(image));
+
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+async function readImagesFromPaths(image_paths?: string[]): Promise<string[] | undefined> {
+  if (!image_paths || image_paths.length === 0) {
+    return undefined;
+  }
+
+  const images = await Promise.all(image_paths.map(async imagePath => {
+    const normalizedPath = normalizeText(imagePath);
+    if (!normalizedPath) {
+      return undefined;
+    }
+
+    try {
+      const fileBuffer = await readFile(normalizedPath);
+      if (fileBuffer.length === 0) {
+        return undefined;
+      }
+
+      return fileBuffer.toString('base64');
+    } catch {
+      return undefined;
+    }
+  }));
+
+  const validImages = images.filter((image): image is string => Boolean(image));
+  return validImages.length > 0 ? validImages : undefined;
+}
+
+async function resolveInputImages(input: {
+  images_b64?: string[];
+  image_paths?: string[];
+}): Promise<string[] | undefined> {
+  const [inlineImages, pathImages] = await Promise.all([
+    Promise.resolve(normalizeImages(input.images_b64)),
+    readImagesFromPaths(input.image_paths),
+  ]);
+
+  const merged = [
+    ...(inlineImages || []),
+    ...(pathImages || []),
+  ];
+
+  return merged.length > 0 ? merged : undefined;
+}
+
+async function prepareImagesForOllama(images_b64?: string[]): Promise<string[] | undefined> {
+  const normalizedImages = normalizeImages(images_b64);
+  if (!normalizedImages || normalizedImages.length === 0) {
+    return undefined;
+  }
+
+  const prepared = await Promise.all(normalizedImages.map(async image => {
+    try {
+      const inputBuffer = Buffer.from(image, 'base64');
+      if (inputBuffer.length === 0) {
+        return image;
+      }
+
+      const metadata = await sharp(inputBuffer, { failOn: 'none' }).metadata();
+      if (metadata.format === 'jpeg') {
+        return image;
+      }
+
+      const outputBuffer = await sharp(inputBuffer, { failOn: 'none' })
+        .jpeg({ quality: 92 })
+        .toBuffer();
+
+      return outputBuffer.toString('base64');
+    } catch {
+      return image;
+    }
+  }));
+
+  return prepared.length > 0 ? prepared : undefined;
 }
 
 function buildAudioDiagnostics(input: ToolInput): AudioDiagnostics {
@@ -87,6 +207,11 @@ function resolveTask(
   text: string | undefined,
   images_b64: string[] | undefined
 ): TaskType {
+  // If images are present, force vision task (unless explicitly requesting image generation)
+  if (images_b64 && images_b64.length > 0 && task !== 'image_generation') {
+    return 'vision';
+  }
+
   if (!task || task === 'auto') {
     return detectTaskType(text, images_b64);
   }
@@ -263,14 +388,20 @@ async function executeModelRequest(
     baseUrl: config.baseUrl || 'http://127.0.0.1:11434',
     requestTimeout: config.requestTimeout || 120000,
   });
+  const normalizedImages = normalizeImages(input.images_b64);
+  const preparedImages = await prepareImagesForOllama(input.images_b64);
 
   if (input.task === 'vision') {
+    if (!normalizedImages || normalizedImages.length === 0 || !preparedImages || preparedImages.length === 0) {
+      throw new Error('Vision task requires at least one valid base64 image');
+    }
+
     const result = await client.chat(
       input.model,
       [{
         role: 'user',
         content: input.text || 'Describe this image',
-        images: input.images_b64,
+        images: preparedImages,
       }],
       input.keep_alive ?? config.defaultKeepAlive ?? 0
     );
@@ -292,8 +423,9 @@ async function executeModelRequest(
     throw new Error('Image generation endpoint returned no image payload');
   }
 
+  const hasImages = preparedImages && preparedImages.length > 0;
   const messages = input.text
-    ? [{ role: 'user', content: input.text }]
+    ? [{ role: 'user', content: input.text, ...(hasImages ? { images: preparedImages } : {}) }]
     : [];
   const result = await client.chat(
     input.model,
@@ -339,7 +471,8 @@ export async function handleOmniInspect(
   const transcript = normalizeText(input.context?.transcript);
   const directText = normalizeText(input.text);
   const effectiveText = transcript ?? directText;
-  const task = resolveTask(input.task, effectiveText, input.images_b64);
+  const normalizedImages = await resolveInputImages(input);
+  const task = resolveTask(input.task, effectiveText, normalizedImages);
 
   try {
     const [hardware, inventory] = await Promise.all([
@@ -350,7 +483,7 @@ export async function handleOmniInspect(
     const recommendationInput = {
       task,
       text: effectiveText,
-      images_b64: input.images_b64,
+      images_b64: normalizedImages,
       preference: input.preference ?? config.defaultPreference ?? 'speed',
       allowedModels: config.allowedModels,
       _runningProcesses: inventory.runningModels,
@@ -414,14 +547,15 @@ export async function handleOmniRun(
   const transcript = normalizeText(input.context?.transcript);
   const directText = normalizeText(input.text);
   const effectiveText = transcript ?? directText;
-  const task = resolveTask(input.task, effectiveText, input.images_b64);
+  const normalizedImages = await resolveInputImages(input);
+  const task = resolveTask(input.task, effectiveText, normalizedImages);
   const diagnostics = createDiagnostics(input);
   const now = Date.now();
-  const requestKey = buildRequestKey(task, effectiveText, input.images_b64);
+  const requestKey = buildRequestKey(task, effectiveText, normalizedImages);
 
   pruneRecommendationLocks(now);
 
-  if (diagnostics.audio.hasAudio && !effectiveText && (!input.images_b64 || input.images_b64.length === 0)) {
+  if (diagnostics.audio.hasAudio && !effectiveText && (!normalizedImages || normalizedImages.length === 0)) {
     diagnostics.timings!.completed = Date.now() - startTime;
     return {
       chosen_model: '',
@@ -450,7 +584,7 @@ export async function handleOmniRun(
       const recommendedModel = await resolveRecommendedModelName({
         task,
         text: effectiveText,
-        images_b64: input.images_b64,
+        images_b64: normalizedImages,
         preference: input.preference,
       }, config);
 
@@ -519,7 +653,7 @@ export async function handleOmniRun(
       model: selectedModel,
       task,
       text: effectiveText,
-      images_b64: input.images_b64,
+      images_b64: normalizedImages,
       keep_alive: input.keep_alive,
     }, config);
 
@@ -561,14 +695,15 @@ export async function handleOmniRoute(
   const directText = normalizeText(input.text);
   const effectiveText = transcript ?? directText;
   const diagnostics = createDiagnostics(input);
-  const task = resolveTask(input.task, effectiveText, input.images_b64);
+  const normalizedImages = await resolveInputImages(input);
+  const task = resolveTask(input.task, effectiveText, normalizedImages);
 
   // Get keepAlive value
   const keepAlive = input.keep_alive ?? config.defaultKeepAlive ?? 0;
   const maxRetries = input.max_retries ?? 3;
   const preference = input.preference ?? config.defaultPreference ?? 'speed';
 
-  if (diagnostics.audio.hasAudio && !effectiveText && (!input.images_b64 || input.images_b64.length === 0)) {
+  if (diagnostics.audio.hasAudio && !effectiveText && (!normalizedImages || normalizedImages.length === 0)) {
     diagnostics.timings!.completed = Date.now() - startTime;
     return {
       chosen_model: '',
@@ -587,7 +722,7 @@ export async function handleOmniRoute(
     const selectedModels = chooseModel(inventory.candidates, {
       task,
       text: effectiveText,
-      images_b64: input.images_b64,
+      images_b64: normalizedImages,
       preference,
       maxRetries,
       keepAlive,
@@ -619,7 +754,7 @@ export async function handleOmniRoute(
           model: model.name,
           task,
           text: effectiveText,
-          images_b64: input.images_b64,
+          images_b64: normalizedImages,
           keep_alive: keepAlive,
         }, config);
 

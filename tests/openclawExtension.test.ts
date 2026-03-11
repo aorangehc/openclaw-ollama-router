@@ -119,6 +119,7 @@ describe('OpenClaw extension entry', () => {
       use_recommended_model: true,
       task: 'chat',
       text: 'hello',
+      image_paths: ['/tmp/example.png'],
     });
     expect(handleOmniRunMock).toHaveBeenCalledWith(
       {
@@ -126,6 +127,7 @@ describe('OpenClaw extension entry', () => {
         use_recommended_model: true,
         task: 'chat',
         text: 'hello',
+        image_paths: ['/tmp/example.png'],
       },
       {
         baseUrl: 'http://127.0.0.1:11434',

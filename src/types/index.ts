@@ -183,6 +183,7 @@ export interface ToolInput {
   task: TaskType;
   text?: string;
   images_b64?: string[];
+  image_paths?: string[];
   preference?: Preference;
   max_retries?: number;
   keep_alive?: number | string;
@@ -193,6 +194,7 @@ export interface InspectInput {
   task?: TaskType;
   text?: string;
   images_b64?: string[];
+  image_paths?: string[];
   preference?: Preference;
   context?: AudioContext;
 }

@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { writeFile, unlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { CandidateModel, PluginConfig } from '../src/types/index.js';
 
 const { mockClient, chooseModelMock, detectTaskTypeMock, readHardwareSnapshotMock } = vi.hoisted(() => ({
@@ -379,7 +382,7 @@ describe('Handler Integration', () => {
         use_recommended_model: true,
         task: 'vision',
         text: 'Describe this image briefly.',
-        images_b64: ['base64'],
+        images_b64: ['ZmFrZQ=='],
       },
       config
     );
@@ -393,10 +396,90 @@ describe('Handler Integration', () => {
       [{
         role: 'user',
         content: 'Describe this image briefly.',
-        images: ['base64'],
+        images: ['ZmFrZQ=='],
       }],
       0
     );
+  });
+
+  it('normalizes data URL images before sending them to Ollama', async () => {
+    mockClient.chat.mockResolvedValueOnce({
+      message: { role: 'assistant', content: 'Vision result' },
+    });
+
+    const response = await handleOmniRun(
+      {
+        model: 'qwen2.5:7b',
+        task: 'vision',
+        text: 'Describe this image after normalization.',
+        images_b64: ['data:image/png;base64,ZmFrZQ'],
+      },
+      config
+    );
+
+    expect(response.chosen_model).toBe('qwen2.5:7b');
+    expect(response.text).toBe('Vision result');
+    expect(mockClient.chat).toHaveBeenCalledWith(
+      'qwen2.5:7b',
+      [{
+        role: 'user',
+        content: 'Describe this image after normalization.',
+        images: ['ZmFrZQ=='],
+      }],
+      0
+    );
+  });
+
+  it('loads image bytes from image_paths before sending them to Ollama', async () => {
+    const filePath = join(tmpdir(), `openclaw-vision-${Date.now()}.png`);
+    await writeFile(
+      filePath,
+      Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXKQAAAAASUVORK5CYII=', 'base64')
+    );
+
+    mockClient.chat.mockResolvedValueOnce({
+      message: { role: 'assistant', content: 'Vision result from path' },
+    });
+
+    try {
+      const response = await handleOmniRun(
+        {
+          model: 'qwen2.5:7b',
+          task: 'vision',
+          text: 'Describe this image from path.',
+          image_paths: [filePath],
+        },
+        config
+      );
+
+      expect(response.chosen_model).toBe('qwen2.5:7b');
+      expect(response.text).toBe('Vision result from path');
+      expect(mockClient.chat).toHaveBeenCalledTimes(1);
+      expect(mockClient.chat.mock.calls[0][1][0].images?.[0]).toMatch(/^\/9j\//);
+    } finally {
+      await unlink(filePath).catch(() => undefined);
+    }
+  });
+
+  it('returns a structured error when a vision request has no valid image payload', async () => {
+    const response = await handleOmniRun(
+      {
+        model: 'qwen2.5:7b',
+        task: 'vision',
+        text: 'Describe this invalid image payload.',
+        images_b64: ['not-a-valid-image%%%'],
+      },
+      config
+    );
+
+    expect(response.chosen_model).toBe('qwen2.5:7b');
+    expect(response.text).toBeUndefined();
+    expect(response.diagnostics.errors).toContainEqual({
+      model: 'qwen2.5:7b',
+      message: 'Vision task requires at least one valid base64 image',
+      status: undefined,
+    });
+    expect(mockClient.chat).not.toHaveBeenCalled();
   });
 
   it('rejects follow-up runs that try to override a recommendation lock', async () => {
@@ -448,7 +531,7 @@ describe('Handler Integration', () => {
         use_recommended_model: true,
         task: 'vision',
         text: 'Describe this image briefly.',
-        images_b64: ['base64'],
+        images_b64: ['ZmFrZQ=='],
       },
       config
     );
@@ -458,7 +541,7 @@ describe('Handler Integration', () => {
         model: blocked.name,
         task: 'vision',
         text: 'Describe this image briefly.',
-        images_b64: ['base64'],
+        images_b64: ['ZmFrZQ=='],
       },
       config
     );

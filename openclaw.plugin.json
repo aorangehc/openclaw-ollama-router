@@ -28,6 +28,11 @@
             "items": { "type": "string" },
             "description": "Base64 encoded images for vision tasks"
           },
+          "image_paths": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Absolute local image file paths for vision tasks, such as Telegram-downloaded attachments"
+          },
           "preference": {
             "type": "string",
             "enum": ["speed", "quality"],

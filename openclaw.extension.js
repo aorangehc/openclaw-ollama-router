@@ -23,6 +23,9 @@ const sharedInputFields = {
   images_b64: Type.Optional(
     Type.Array(Type.String(), { description: 'Base64 encoded images for vision tasks' })
   ),
+  image_paths: Type.Optional(
+    Type.Array(Type.String(), { description: 'Absolute local image file paths for vision tasks, such as Telegram-downloaded attachments' })
+  ),
   context: sharedContext,
 };
 
@@ -32,6 +35,9 @@ const omniInspectParameters = Type.Object(
     text: Type.Optional(Type.String({ description: 'Text prompt or conversation content' })),
     images_b64: Type.Optional(
       Type.Array(Type.String(), { description: 'Base64 encoded images for vision tasks' })
+    ),
+    image_paths: Type.Optional(
+      Type.Array(Type.String(), { description: 'Absolute local image file paths for vision tasks, such as Telegram-downloaded attachments' })
     ),
     preference: Type.Optional(
       Type.Union([Type.Literal('speed'), Type.Literal('quality')], {
