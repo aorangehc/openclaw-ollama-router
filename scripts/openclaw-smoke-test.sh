@@ -5,7 +5,7 @@ set -euo pipefail
 MODE="${1:-all}"
 AGENT_ID="${OPENCLAW_AGENT_ID:-main}"
 
-VISION_IMAGE_B64="iVBORw0KGgoAAAANSUhEUgAAABEAAAARCAMAAAAMs7fIAAAAjVBMVEX///9tbUl2dmJtgFt4eFpzd1lyeFhzd1pzeFlzellzeVlzd1lzeFp0eFpyeVlzeVlzd1pyeVp0eFpzeFl0eVp2e1x2e113fF54fWCEiG2Lj3WUmICvsqGztqW4uqq9v7C/wbPBw7XCxLbExrnKzMDR08jR08nS1MrT1cvU1czX2M/a3NPb3NT8/Pv///8B7noCAAAAE3RSTlMABw0OEZKTlJWV8fLy8vPz9PX1HYf5oAAAAIdJREFUeNpl0MUBwzAMQFGFmbHM3Gr/8ZrEbP+b38WSYM5lwZIVFUlMSorQmiSsG1HlT5I1chmAXYrnumlKG5ycw/G3aXJHkgO+Byqr6zjBCV99Q2WLn7E943MCKs0evxd8dI2QZod4n0DIRLcJqNB5WgLTPPrMKQAElQS1N4kVSrsHFpj3+QOaLRG3Nf1QIAAAAABJRU5ErkJggg=="
+VISION_IMAGE_B64="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXKQAAAAASUVORK5CYII="
 
 extract_session_id() {
   local output="$1"
@@ -83,7 +83,7 @@ run_guided_case() {
 
   run_case \
     "guided_${task}" \
-    "请严格按这个流程执行，不要调用 omni_route，也不要在失败后重试第二个模型：1. 先调用 omni_inspect，参数为 task=${task}，text='${text}'${extra}。2. 如果 recommended_models 非空，必须使用 recommended_models[0]，并调用 omni_run 时设置 use_recommended_model=true；如果 recommended_models 为空，就从 models 里选择第一个 allowed=true 且 supportsResolvedTask=true 的模型，并调用 omni_run。3. 调用 omni_run，传入 model、task=${task}、text='${text}'${extra}。4. 如果 omni_run 返回错误，立即停止，不要再调用任何其他模型。5. 不要解释，只执行工具。" \
+    "请严格按这个流程执行，不要调用 omni_route，也不要在失败后重试第二个模型：1. 先调用 omni_inspect，参数为 task=${task}，text='${text}'${extra}。2. 结合 models、recommended_models 和 hardware，自行选择一个 allowed=true 且 supportsResolvedTask=true 的最终模型。recommended_models 仅供参考，不是强制。3. 调用 omni_run，传入你选定的 model、task=${task}、text='${text}'${extra}。4. 如果 omni_run 返回错误，立即停止，不要再调用任何其他模型。5. 不要解释，只执行工具。" \
     "omni_inspect" \
     "omni_run"
 }

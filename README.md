@@ -164,7 +164,7 @@ The skill should follow this policy:
 
 1. If the main model can answer directly, answer directly.
 2. If local multimodal or local inference is needed, call `omni_inspect`.
-3. Prefer `recommended_models[0]`, but the main model may override using the raw model list and hardware snapshot.
+3. Let the main model choose the final model using `models`, `recommended_models`, and the hardware snapshot.
 4. Call `omni_run`.
 5. Only use `omni_route` as a fallback or compatibility path.
 

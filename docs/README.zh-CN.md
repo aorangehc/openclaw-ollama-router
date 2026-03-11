@@ -156,7 +156,7 @@ openclaw plugins uninstall openclaw-omni-router --force --keep-files
 
 1. 主模型如果能直接答，就不要调用本地工具。
 2. 需要本地多模态或本地推理时，先调用 `omni_inspect`。
-3. 默认优先选 `recommended_models[0]`，但允许主模型结合 `models` 和硬件情况自己改判。
+3. 由主模型结合 `models`、`recommended_models` 和硬件情况自行决定最终模型。
 4. 调用 `omni_run`。
 5. `omni_route` 只作为兼容或兜底。
 
