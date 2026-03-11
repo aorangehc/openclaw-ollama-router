@@ -170,7 +170,47 @@ The skill should follow this policy:
 
 ## Voice Input
 
-If you want voice messages transcribed into tool input, enable `tools.media.audio` in OpenClaw. The plugin consumes the transcript and records audio-aware diagnostics, but it does not perform speech-to-text itself.
+If you want voice messages transcribed into tool input, enable `tools.media.audio` in OpenClaw. The plugin still consumes `context.transcript` and records audio-aware diagnostics, but this repository now ships a helper script for OpenClaw's CLI audio hook:
+
+```json
+{
+  "tools": {
+    "media": {
+      "audio": {
+        "enabled": true,
+        "provider": "cli",
+        "cli": {
+          "command": "bash",
+          "args": [
+            "/absolute/path/to/openclaw-ollama-router/scripts/ollama-transcribe.sh",
+            "-f",
+            "{{MediaPath}}",
+            "--model",
+            "whisper:latest"
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+`scripts/ollama-transcribe.sh` calls Ollama's OpenAI-compatible transcription endpoint and prints only the transcript on stdout. It defaults to `OLLAMA_BASE_URL=http://127.0.0.1:11434` and `OLLAMA_STT_MODEL=whisper`, accepts `--base-url` / `--model` overrides, and optionally re-encodes audio through `ffmpeg` when available.
+
+Prerequisites for the helper script:
+
+- `curl`
+- `node`
+- `ffmpeg` recommended for `.ogg` / Telegram voice-note normalization
+
+## Voice Output
+
+Voice replies still belong to OpenClaw, not this plugin. Configure `messages.tts` in OpenClaw and set `auto: "inbound"` if you want Telegram voice messages to receive voice replies automatically. That gives you a practical loop of:
+
+1. Telegram voice note -> OpenClaw attachment download
+2. `tools.media.audio` -> `scripts/ollama-transcribe.sh` -> Ollama Whisper transcript
+3. transcript -> `omni_run` / `omni_route`
+4. final text reply -> OpenClaw `messages.tts` -> voice reply to the user
 
 ## Development
 

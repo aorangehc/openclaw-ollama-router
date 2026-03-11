@@ -162,7 +162,47 @@ openclaw plugins uninstall openclaw-omni-router --force --keep-files
 
 ## 语音输入
 
-如果要让语音消息自动进入这套流程，需要在 OpenClaw 里启用 `tools.media.audio`。插件本身不做转写，只消费 transcript，并把音频上下文写进 diagnostics。
+如果要让语音消息自动进入这套流程，需要在 OpenClaw 里启用 `tools.media.audio`。插件本身仍然只消费 `context.transcript`，但这个仓库现在自带了一个给 OpenClaw CLI 音频入口使用的脚本：
+
+```json
+{
+  "tools": {
+    "media": {
+      "audio": {
+        "enabled": true,
+        "provider": "cli",
+        "cli": {
+          "command": "bash",
+          "args": [
+            "/absolute/path/to/openclaw-ollama-router/scripts/ollama-transcribe.sh",
+            "-f",
+            "{{MediaPath}}",
+            "--model",
+            "whisper:latest"
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+`scripts/ollama-transcribe.sh` 会调用 Ollama 的 OpenAI 兼容 transcription 接口，并且只把 transcript 输出到 stdout，方便 OpenClaw 直接塞进 `context.transcript`。脚本默认使用 `OLLAMA_BASE_URL=http://127.0.0.1:11434` 和 `OLLAMA_STT_MODEL=whisper`，也支持通过 `--base-url` / `--model` 覆盖；如果机器上有 `ffmpeg`，还会优先把 Telegram 常见的 `.ogg` 语音转成更稳妥的单声道 wav 再送去转写。
+
+脚本依赖：
+
+- `curl`
+- `node`
+- 建议安装 `ffmpeg`，提升 `.ogg` / Telegram 语音兼容性
+
+## 语音输出
+
+语音回复仍然由 OpenClaw 的 `messages.tts` 负责，不由这个插件直接生成音频。把 `messages.tts.auto` 设为 `inbound`，就可以形成一条实用链路：
+
+1. Telegram 用户发送语音
+2. OpenClaw 下载附件并通过 `tools.media.audio` 调用 `scripts/ollama-transcribe.sh`
+3. Ollama Whisper 返回 transcript，插件按现有流程理解并生成文字回复
+4. OpenClaw 用 `messages.tts` 把文字转回语音并发给用户
 
 ## 开发与测试
 

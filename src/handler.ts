@@ -22,7 +22,7 @@ import type {
 } from './types/index.js';
 
 const AUDIO_TRANSCRIPTION_HINT =
-  "I received audio input but couldn't find a transcript. Enable tools.media.audio in OpenClaw or send text instead.";
+  '收到语音消息，但当前没有可用的转写结果。请在 OpenClaw 中启用 tools.media.audio 并配置 Ollama 语音转写，或直接发送文字。';
 const RECOMMENDATION_LOCK_TTL_MS = 10 * 60 * 1000;
 const recommendationLocks = new Map<string, { model: string; expiresAt: number }>();
 

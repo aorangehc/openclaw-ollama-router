@@ -30,15 +30,17 @@
       "audio": {
         "enabled": true,
         "provider": "cli",
-        "description": "Audio transcription - local CLI preferred",
+        "description": "Audio transcription through local Ollama Whisper",
         "cli": {
-          "command": "whisper-cli",
-          "args": ["-f", "{{MediaPath}}"],
-          "description": "Use whisper-cli for local transcription"
-        },
-        "fallback": {
-          "provider": "google",
-          "description": "Fallback to Google Cloud Speech if CLI fails"
+          "command": "bash",
+          "args": [
+            "/absolute/path/to/openclaw-ollama-router/scripts/ollama-transcribe.sh",
+            "-f",
+            "{{MediaPath}}",
+            "--model",
+            "whisper:latest"
+          ],
+          "description": "Use the bundled Ollama transcription helper"
         }
       }
     }
@@ -52,19 +54,20 @@
     }
   },
   "examples": {
-    "description": "Example OpenClaw configuration for Omni Router plugin with voice support",
-    "notes": [
-      "1. Ensure Ollama is running on your machine (ollama serve)",
-      "2. Install this plugin into OpenClaw: openclaw plugins install /absolute/path/to/openclaw-ollama-router --link",
-      "3. Configure allowedModels to restrict which models can be used",
-      "4. Set preference to 'quality' if you want larger models by default",
-      "5. Voice input requires tools.media.audio to be enabled",
-      "6. Voice output requires messages.tts.auto to be configured"
-    ],
-    "alternativeConfigs": {
-      "taggedTts": {
-        "description": "Alternative: Use tagged TTS mode for manual control",
-        "messages": {
+      "description": "Example OpenClaw configuration for Omni Router plugin with voice support",
+      "notes": [
+        "1. Ensure Ollama is running on your machine (ollama serve)",
+        "2. Install this plugin into OpenClaw: openclaw plugins install /absolute/path/to/openclaw-ollama-router --link",
+        "3. Pull a speech-recognition model into Ollama, for example: ollama pull whisper:latest",
+        "4. Configure allowedModels to restrict which models can be used",
+        "5. Set preference to 'quality' if you want larger models by default",
+        "6. Voice input requires tools.media.audio to be enabled with the bundled Ollama helper",
+        "7. Voice output requires messages.tts.auto to be configured"
+      ],
+      "alternativeConfigs": {
+        "taggedTts": {
+          "description": "Alternative: Use tagged TTS mode for manual control",
+          "messages": {
           "tts": {
             "auto": "tagged"
           }

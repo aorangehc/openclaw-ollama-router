@@ -138,7 +138,7 @@ describe('Voice Input Handling', () => {
     );
 
     expect(response.chosen_model).toBe('');
-    expect(response.text).toContain("couldn't find a transcript");
+    expect(response.text).toContain('当前没有可用的转写结果');
     expect(response.diagnostics.audio).toEqual({
       hasAudio: true,
       transcript_used: false,
